@@ -1,0 +1,45 @@
+{
+  "name": "proyectos-backend",
+  "version": "1.0.0",
+  "description": "Backend proyectos estratégicos",
+  "main": "dist/handler.js",
+  "scripts": {
+    "dev": "tsx watch src/app.local.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/handler.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OASI-CL/proyectos-backend.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/OASI-CL/proyectos-backend/issues"
+  },
+  "homepage": "https://github.com/OASI-CL/proyectos-backend#readme",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.1132.0",
+    "@aws-sdk/s3-request-presigner": "^3.1132.0",
+    "aws-jwt-verify": "^5.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.0",
+    "serverless-http": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.5.1",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}
