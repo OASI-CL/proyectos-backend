@@ -1,0 +1,5 @@
+-- ============================================================================
+-- OASI - Esquema de base de datos (PostgreSQL, RDS t3.micro)
+-- Placeholder: se completa en la etapa de backend (ver claude_instructions.md
+-- secciones "Regla de IDs", "Auditoría" y "Vistas").
+-- ============================================================================
