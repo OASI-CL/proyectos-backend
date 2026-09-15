@@ -288,12 +288,15 @@ router.get('/', async (req, res, next) => {
       `),
 
       // --- 5. "Monitor projects" banner ---
+      //
+      // Two independent lenses on projects that have not started construction
+      // yet, not a single mutually-exclusive split — a project can appear in
+      // both cards.
+      //   upcoming     — construction starts within the next 90 days
+      //   few_permits  — 1 or 2 pending permits left (close to fully cleared)
       run(`
         SELECT
-          CASE
-            WHEN construction_start_on < CURRENT_DATE + 90 THEN 'upcoming'
-            ELSE 'later'
-          END                                       AS bucket,
+          'upcoming'                                 AS bucket,
           count(*)::int                             AS project_count,
           COALESCE(sum(investment_mmusd), 0)::numeric AS investment_mmusd,
           COALESCE(sum(construction_jobs), 0)::int  AS construction_jobs,
@@ -311,7 +314,29 @@ router.get('/', async (req, res, next) => {
         WHERE project_status = 'No se ha iniciado'
           AND construction_start_on IS NOT NULL
           AND construction_start_on >= CURRENT_DATE
-        GROUP BY 1
+          AND construction_start_on < CURRENT_DATE + 90
+
+        UNION ALL
+
+        SELECT
+          'few_permits'                              AS bucket,
+          count(*)::int                             AS project_count,
+          COALESCE(sum(investment_mmusd), 0)::numeric AS investment_mmusd,
+          COALESCE(sum(construction_jobs), 0)::int  AS construction_jobs,
+          COALESCE(sum(operation_jobs), 0)::int     AS operation_jobs,
+          json_agg(
+            json_build_object(
+              'id', id, 'idExcel', id_excel, 'name', name,
+              'companyName', company_name, 'sector', sector, 'region', region,
+              'investmentMmusd', investment_mmusd,
+              'constructionStartOn', construction_start_on,
+              'pendingPermitCount', pending_permit_count
+            ) ORDER BY pending_permit_count, name
+          )                                         AS projects
+        FROM projects
+        WHERE project_status = 'No se ha iniciado'
+          AND pending_permit_count > 0
+          AND pending_permit_count < 3
       `),
 
       // --- 8. Permits by agency ---
@@ -380,7 +405,7 @@ router.get('/', async (req, res, next) => {
       `),
     ])
 
-    const bucket = (name: 'upcoming' | 'later') => {
+    const bucket = (name: 'upcoming' | 'few_permits') => {
       const row = monitor.rows.find((r) => r.bucket === name)
       if (!row) {
         return {
@@ -407,7 +432,7 @@ router.get('/', async (req, res, next) => {
       projectsBySector: camelizeRows(projectsBySector.rows),
       rcaStatus: camelizeRows(rcaStatus.rows),
       timeline: camelizeRows(timeline.rows),
-      monitor: { upcoming: bucket('upcoming'), later: bucket('later') },
+      monitor: { upcoming: bucket('upcoming'), fewPermits: bucket('few_permits') },
       permitsByAgency: camelizeRows(permitsByAgency.rows),
       permitsByRegion: camelizeRows(permitsByRegion.rows),
       permitStatus: camelizeRows(permitStatus.rows),
