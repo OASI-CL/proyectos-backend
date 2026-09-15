@@ -3,3 +3,11 @@ dist/
 .env
 *.log
 .DS_Store
+
+# Excel origen con datos privados - nunca subir a GitHub
+data/
+
+# Entorno virtual Python (seed.py)
+.venv/
+__pycache__/
+
