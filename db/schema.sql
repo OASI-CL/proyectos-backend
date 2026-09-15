@@ -247,11 +247,19 @@ CREATE INDEX idx_adjuntos_permiso ON adjuntos(permiso_id);
 CREATE VIEW v_permisos AS
 SELECT
   p.*,
-  pr.nombre        AS proyecto_nombre,
-  pr.id_excel      AS proyecto_id_excel,
-  o.nombre         AS organismo_nombre,
-  m.nombre         AS ministerio_nombre,
-  e.nombre         AS empresa_nombre,
+  pr.nombre          AS proyecto_nombre,
+  pr.id_excel        AS proyecto_id_excel,
+  o.nombre           AS organismo_nombre,
+  o.ministerio_id    AS ministerio_id,
+  m.nombre           AS ministerio_nombre,
+  e.id               AS empresa_id,
+  e.nombre           AS empresa_nombre,
+  -- región/sector/etapa/inversión viven en el proyecto, pero la página de
+  -- Permisos filtra por ellas, así que la vista las expone acá también.
+  pr.region          AS region,
+  pr.sector          AS sector,
+  pr.etapa           AS etapa,
+  pr.inversion_mmusd AS inversion_mmusd,
   CASE WHEN p.fecha_ingreso IS NOT NULL
        THEN (COALESCE(p.fecha_resolucion, CURRENT_DATE) - p.fecha_ingreso)
        ELSE NULL END                                            AS dias_tramitacion,
@@ -305,11 +313,17 @@ GROUP BY pr.id, e.nombre;
 CREATE VIEW v_permisos_comite AS
 SELECT
   p.*,
-  pr.nombre        AS proyecto_nombre,
-  pr.id_excel      AS proyecto_id_excel,
-  o.nombre         AS organismo_nombre,
-  m.nombre         AS ministerio_nombre,
-  e.nombre         AS empresa_nombre,
+  pr.nombre          AS proyecto_nombre,
+  pr.id_excel        AS proyecto_id_excel,
+  o.nombre           AS organismo_nombre,
+  o.ministerio_id    AS ministerio_id,
+  m.nombre           AS ministerio_nombre,
+  e.id               AS empresa_id,
+  e.nombre           AS empresa_nombre,
+  pr.region          AS region,
+  pr.sector          AS sector,
+  pr.etapa           AS etapa,
+  pr.inversion_mmusd AS inversion_mmusd,
   c.id             AS comite_id,
   c.numero         AS comite_numero,
   c.fecha          AS comite_fecha,

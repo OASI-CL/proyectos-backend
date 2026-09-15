@@ -15,21 +15,25 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 ## Estado actual
 
 ✅ Hecho:
-- Estructura del proyecto (Express + TypeScript, esqueleto de Lambda handler)
-- `db/schema.sql` — schema completo: tablas, triggers de auditoría, vistas
+- `db/schema.sql` — schema completo: tablas, triggers de auditoría, 6 vistas
 - `db/seed.py` — carga el Excel origen a Postgres, probado con datos reales
   (317 proyectos, 1.552 permisos, 12 ministerios, 19 organismos)
-- Conexión a Postgres (`src/db/client.ts`)
+- Todas las rutas de la API (ver "Endpoints" abajo)
+- `src/middleware/scope.ts` — filtro por empresa/organismo según rol, aplicado
+  en el backend en cada consulta
+- `src/services/historial.ts` — diff campo a campo en cada UPDATE, dentro de
+  la misma transacción
+- `src/routes/adjuntos.ts` — URLs prefirmadas de S3 para subir/descargar
 
-🚧 Pendiente (ver "Lo que falta construir" en `claude_instructions.md`):
-- `src/middleware/auth.ts` — verificar JWT contra Cognito
-- `src/middleware/scope.ts` — filtrar por empresa/organismo según rol
-- Rutas CRUD (`src/routes/proyectos.ts`, `permisos.ts`, `comites.ts`, `organismos.ts`, `usuarios.ts`)
-- `src/services/historial.ts` — diff automático en cada UPDATE
-- Upload a S3 con URL prefirmada (`src/routes/adjuntos.ts`)
-
-Hoy el servidor solo expone `GET /health` para confirmar que todo el toolchain
-(Node, TypeScript, Postgres) está andando.
+🚧 Pendiente:
+- **Cognito.** `src/middleware/auth.ts` ya tiene la verificación contra el
+  JWKS escrita, pero hoy el server corre con `AUTH_MODE=dev`, que arma un
+  usuario falso a partir de headers `x-dev-*` (así el frontend puede tener un
+  selector de rol para probar cada vista). **En producción tiene que ir
+  `AUTH_MODE=cognito`.**
+- **S3.** Las rutas de adjuntos funcionan pero necesitan `S3_BUCKET_ADJUNTOS`
+  y `AWS_REGION` configurados; sin eso responden 503 con un mensaje claro.
+- CRUD de usuarios (depende de que exista el User Pool).
 
 ---
 
@@ -59,17 +63,18 @@ proyectos-backend/
     db/
       client.ts            pool de conexiones pg, lee credenciales de .env
     middleware/
-      auth.ts              [pendiente] verifica JWT contra JWKS de Cognito
-      scope.ts              [pendiente] inyecta el filtro por rol (empresa/organismo)
+      auth.ts              verifica JWT contra JWKS de Cognito (o usuario falso en AUTH_MODE=dev)
+      scope.ts              inyecta el filtro por rol + WhereBuilder para queries parametrizadas
     routes/
-      proyectos.ts          [pendiente]
-      permisos.ts           [pendiente]
-      comites.ts             [pendiente]
-      organismos.ts          [pendiente]
-      adjuntos.ts             [pendiente]
-      usuarios.ts             [pendiente]
+      dashboard.ts          KPIs y datos de los gráficos
+      proyectos.ts          lista, detalle, alta, permisos del proyecto
+      permisos.ts           lista, detalle, edición, historial, exportación CSV
+      comites.ts             sesiones y tabla por comité
+      organismos.ts          resumen por organismo
+      adjuntos.ts             URLs prefirmadas de S3
+      catalogos.ts            listas para dropdowns
     services/
-      historial.ts           [pendiente] diff campo a campo + escritura en `historial`
+      historial.ts           diff campo a campo + escritura en `historial`
     shared/
       types.ts               tipos compartidos con el frontend (ver nota abajo)
   db/
@@ -126,10 +131,17 @@ DB_PORT=5432
 DB_NAME=oasi_dev
 DB_USER=postgres
 DB_PASSWORD=oasi_dev_local
+AUTH_MODE=dev
 ```
 
-(Los valores de `COGNITO_*` y `S3_*` no hacen falta todavía — nada del código
-pendiente los usa aún.)
+`AUTH_MODE=dev` hace que el server no valide JWT y arme un usuario falso a
+partir de los headers `x-dev-rol`, `x-dev-empresa-id` y `x-dev-organismo-id`
+(el frontend los manda desde su selector de rol). **En producción va
+`AUTH_MODE=cognito`** y ahí sí hacen falta `COGNITO_USER_POOL_ID` y
+`COGNITO_CLIENT_ID`.
+
+`S3_BUCKET_ADJUNTOS` y `AWS_REGION` solo se necesitan para los adjuntos; sin
+ellos esas rutas responden 503 y el resto de la API funciona igual.
 
 ### 5. Aplicar el schema
 
@@ -191,18 +203,40 @@ curl http://localhost:3001/health
 
 ## Endpoints
 
-Hoy solo existe:
+Todas las rutas (salvo `/health`) requieren autenticación y aplican el filtro
+de `scope.ts` según el rol. Las URLs usan el **id numérico**, no el del Excel.
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| GET | `/health` | Chequeo de que el server está vivo. Responde `{"status":"ok"}` |
+| GET | `/health` | Chequeo de que el server está vivo |
+| GET | `/me` | Usuario actual (rol y scope) |
+| GET | `/dashboard` | KPIs, pendientes por organismo, evolución por comité, semáforo, 10 permisos más antiguos |
+| GET | `/catalogos` | Listas para los dropdowns: organismos, ministerios, empresas, regiones, sectores, etapas |
+| GET | `/permisos` | Lista paginada. Filtros: `organismo_id`, `ministerio_id`, `empresa_id`, `proyecto_id`, `estado`, `tramo` (`menos_3`/`entre_3_6`/`mas_6`), `region`, `sector`, `critico`, `habilitante`, `fecha_ingreso_desde/hasta`, `id_excel`, `q`. Orden: `sortBy`, `sortDir`. Paginación: `page`, `pageSize` |
+| GET | `/permisos/export` | Los mismos filtros, devuelve CSV (se abre en Excel) |
+| GET | `/permisos/:id` | Detalle |
+| GET | `/permisos/:id/historial` | Historial de cambios con nombre de usuario |
+| PATCH | `/permisos/:id` | Edita y escribe el diff en `historial`, en una transacción |
+| GET | `/proyectos` | Lista paginada. Filtros: `empresa_id`, `sector`, `region`, `etapa`, `con_permisos_6meses`, `sin_pendientes`, `id_excel`, `q` |
+| GET | `/proyectos/:id` | Detalle |
+| GET | `/proyectos/:id/permisos` | Permisos de ese proyecto |
+| POST | `/proyectos` | Crear (queda con `id_excel = NULL`) |
+| POST | `/proyectos/:id/permisos` | Agregar un permiso al proyecto |
+| GET | `/comites` | Lista de sesiones con su resumen |
+| GET | `/comites/:numero` | Tabla del comité, calculada **a la fecha de esa sesión** |
+| GET | `/organismos` | Resumen por organismo |
+| GET | `/adjuntos/permiso/:id` | Adjuntos con URL de descarga prefirmada |
+| POST | `/adjuntos/permiso/:id/url-subida` | URL prefirmada para subir a S3 |
+| POST | `/adjuntos/permiso/:id` | Registra el archivo ya subido |
+| DELETE | `/adjuntos/:id` | Borra el registro y el objeto en S3 |
 
-Los endpoints CRUD reales (`/proyectos`, `/permisos`, `/comites`,
-`/organismos`, `/adjuntos`, `/usuarios`) están definidos en
-`claude_instructions.md` pero todavía no implementados. Todas las rutas van a
-requerir JWT (`Authorization: Bearer <token>`) y van a aplicar el filtro de
-`scope.ts` según el rol del usuario (`admin`, `oasi`, `organismo_lector`,
-`empresa`).
+### Reglas de acceso
+
+- Si un usuario `empresa` pide un permiso o proyecto que no es suyo, la
+  respuesta es **404**, no 403: no se revela que el recurso existe.
+- `organismo_lector` es de solo lectura y solo ve los permisos de su organismo.
+- Los proyectos y permisos creados por una `empresa` quedan en
+  `estado_validacion = 'en_revision'`.
 
 ---
 

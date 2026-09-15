@@ -1,11 +1,11 @@
 // ============================================================================
 // Tipos compartidos front/back — OASI
 //
-// Esta es la FUENTE DE VERDAD. Se copia a:
-//   proyectos-frontend/src/shared/types.ts
-//   proyectos-backend/src/shared/types.ts
-// con `npm run sync-types` (ver scripts/sync-types.sh).
-// NO editar las copias directamente, editar acá y correr el sync.
+// Reflejan exactamente el schema de db/schema.sql y lo que devuelven las
+// vistas. Frontend y backend son repos separados: este archivo está duplicado
+// en los dos (proyectos-backend/src/shared/types.ts y
+// proyectos-frontend/src/shared/types.ts). Si se edita, hay que actualizar
+// las dos copias.
 // ============================================================================
 
 // --- Enums / literales -----------------------------------------------------
@@ -20,22 +20,22 @@ export type Semaforo = 'en_plazo' | 'en_alerta' | 'critico' | 'finalizado'
 
 export type EntidadHistorial = 'proyecto' | 'permiso' | 'empresa'
 
+export type TramoTramitacion = 'menos_3' | 'entre_3_6' | 'mas_6'
+
 // --- Auditoría (presente en toda tabla mutable) -----------------------------
 
 export interface Auditoria {
   created_by: string | null
   updated_by: string | null
-  created_at: string // ISO timestamp
-  updated_at: string // ISO timestamp
+  created_at: string
+  updated_at: string
 }
 
-// --- Entidades base ----------------------------------------------------------
+// --- Catálogos ---------------------------------------------------------------
 
-export interface Empresa extends Auditoria {
+export interface Ministerio {
   id: number
-  id_excel: string | null
   nombre: string
-  rut: string | null
 }
 
 export interface Organismo {
@@ -45,43 +45,69 @@ export interface Organismo {
   ministerio_id: number
 }
 
-export interface Ministerio {
+export interface Empresa extends Auditoria {
   id: number
+  id_excel: string | null
   nombre: string
+  rut: string | null
 }
+
+// --- Proyectos ----------------------------------------------------------------
 
 export interface Proyecto extends Auditoria {
   id: number
   id_excel: string | null
   nombre: string
+  titular: string | null
   empresa_id: number
-  sector: string
-  region: string
-  etapa: string
+  region: string | null
+  sector: string | null
   inversion_mmusd: number | null
+  empleo_construccion: number | null
+  empleo_operacion: number | null
+  estado_ambiental: string | null
+  etapa: string | null
+  fecha_inicio_construccion: string | null
+  fecha_inicio_operacion: string | null
+  habilitantes_aprobado: boolean | null
+  fecha_ingreso: string | null
+  fecha_ultima_resolucion: string | null
+  observaciones_oasi: string | null
   estado_validacion: EstadoValidacion
 }
+
+// --- Permisos -----------------------------------------------------------------
 
 export interface Permiso extends Auditoria {
   id: number
   id_excel: string | null
   proyecto_id: number
   organismo_id: number
-  tipo_permiso: string
   nombre: string
-  estado: EstadoPermiso
-  fecha_ingreso: string | null // ISO date YYYY-MM-DD
-  fecha_resolucion_estimada: string | null
-  fecha_resolucion_real: string | null
+  nombre_estandar: string | null
+  tipo_permiso: string | null
+  n_expediente: string | null
   critico: boolean
-  habilitante: boolean
+  que_habilita: string | null
+  habilitante_construccion: boolean
+  estado: EstadoPermiso
+  fecha_ingreso: string | null
+  fecha_resolucion_estimada: string | null
+  fecha_resolucion: string | null
+  tipo_resolucion: string | null
+  hito_tramitacion: string | null
+  incluido_catastro_hacienda: boolean | null
+  n_catastro: string | null
+  observaciones: string | null
   estado_validacion: EstadoValidacion
 }
 
-export interface Comite {
+// --- Comités -------------------------------------------------------------------
+
+export interface Comite extends Auditoria {
   id: number
   numero: number
-  fecha: string // ISO date
+  fecha: string
 }
 
 export interface PermisoComite {
@@ -93,7 +119,9 @@ export interface PermisoComite {
   compromiso: string | null
 }
 
-export interface Usuario {
+// --- Usuarios ------------------------------------------------------------------
+
+export interface Usuario extends Auditoria {
   id: number
   cognito_sub: string
   nombre: string
@@ -103,6 +131,8 @@ export interface Usuario {
   organismo_id: number | null
 }
 
+// --- Historial y adjuntos --------------------------------------------------------
+
 export interface HistorialItem {
   id: number
   entidad: EntidadHistorial
@@ -111,7 +141,8 @@ export interface HistorialItem {
   valor_anterior: string | null
   valor_nuevo: string | null
   usuario_sub: string
-  usuario_nombre?: string // viene de v_historial (join con usuarios)
+  /** Viene de v_historial (join con usuarios). */
+  usuario_nombre?: string | null
   created_at: string
 }
 
@@ -126,20 +157,32 @@ export interface Adjunto {
   created_at: string
 }
 
-// --- Vistas (valores calculados, nunca persistidos) -------------------------
+// ============================================================================
+// Vistas — todos estos campos son calculados, no existen como columna.
+// ============================================================================
 
+/** v_permisos: calculado contra CURRENT_DATE. */
 export interface VPermiso extends Permiso {
   proyecto_nombre: string
+  proyecto_id_excel: string | null
   organismo_nombre: string
+  ministerio_id: number
   ministerio_nombre: string
+  empresa_id: number
   empresa_nombre: string
+  /** Del proyecto: la página de Permisos filtra por estos campos. */
+  region: string | null
+  sector: string | null
+  etapa: string | null
+  inversion_mmusd: number | null
   dias_tramitacion: number | null
-  menos_3_meses: boolean
-  entre_3_y_6_meses: boolean
-  supera_6_meses: boolean
+  menos_3_meses: boolean | null
+  entre_3_y_6_meses: boolean | null
+  supera_6_meses: boolean | null
   semaforo: Semaforo
 }
 
+/** v_proyectos: proyecto + conteos de sus permisos. */
 export interface VProyecto extends Proyecto {
   empresa_nombre: string
   total_permisos: number
@@ -149,9 +192,14 @@ export interface VProyecto extends Proyecto {
   sin_pendientes: boolean
 }
 
+/** v_permisos_comite: lo mismo que v_permisos pero a la fecha del comité. */
 export interface VPermisoComite extends VPermiso {
+  comite_id: number
   comite_numero: number
   comite_fecha: string
+  compromiso: string | null
+  /** Estado reconstruido a la fecha de la sesión (o el snapshot guardado). */
+  estado_a_la_fecha: EstadoPermiso
 }
 
 export interface VResumenComite {
@@ -166,6 +214,7 @@ export interface VResumenComite {
 export interface VResumenOrganismo {
   organismo_id: number
   organismo_nombre: string
+  ministerio_nombre?: string
   pendientes: number
   supera_6_meses: number
   promedio_dias: number | null
@@ -177,18 +226,19 @@ export interface VResumenOrganismo {
 export interface FiltrosPermisos {
   organismo_id?: number
   ministerio_id?: number
-  estado?: EstadoPermiso
-  tramo?: 'menos_3' | 'entre_3_6' | 'mas_6'
-  region?: string
-  sector?: string
   empresa_id?: number
   proyecto_id?: number
+  estado?: EstadoPermiso
+  tramo?: TramoTramitacion
+  semaforo?: Semaforo
+  region?: string
+  sector?: string
   critico?: boolean
   habilitante?: boolean
   fecha_ingreso_desde?: string
   fecha_ingreso_hasta?: string
   id_excel?: string
-  q?: string // búsqueda de texto libre
+  q?: string
 }
 
 export interface FiltrosProyectos {
@@ -202,7 +252,7 @@ export interface FiltrosProyectos {
   q?: string
 }
 
-// --- Envelope de respuesta paginada ------------------------------------------
+// --- Envelopes de respuesta ---------------------------------------------------
 
 export interface PaginatedResponse<T> {
   data: T[]

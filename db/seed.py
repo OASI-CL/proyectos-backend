@@ -77,6 +77,9 @@ PROYECTOS_COLS = {
 }
 
 PERMISOS_COLS = {
+    # La columna 1 tiene el encabezado en blanco en el Excel, pero contiene
+    # el identificador del permiso ('PM1377', ...).
+    "id_excel": 1,
     "organismo": 2, "ministerio": 3, "nombre": 4, "tipo_permiso": 5,
     "nombre_estandar": 6, "n_expediente": 7, "critico": 8, "que_habilita": 9,
     "proyecto_id_excel": 10, "estado": 20, "fecha_ingreso": 21,
@@ -241,6 +244,7 @@ def read_permisos(wb):
             estado = "Pendiente"
 
         permisos.append({
+            "id_excel": clean_text(row_get(row, PERMISOS_COLS, "id_excel")),
             "organismo": organismo,
             "proyecto_id_excel": proyecto_id_excel,
             "nombre": nombre,
@@ -415,16 +419,16 @@ def main():
             cur.execute(
                 """
                 INSERT INTO permisos (
-                    proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
+                    id_excel, proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
                     n_expediente, critico, que_habilita, habilitante_construccion,
                     estado, fecha_ingreso, fecha_resolucion_estimada, fecha_resolucion,
                     tipo_resolucion, hito_tramitacion, incluido_catastro_hacienda,
                     n_catastro, observaciones
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (
-                    proyecto_id, organismo_id, p["nombre"], p["nombre_estandar"], p["tipo_permiso"],
+                    p["id_excel"], proyecto_id, organismo_id, p["nombre"], p["nombre_estandar"], p["tipo_permiso"],
                     p["n_expediente"], p["critico"], p["que_habilita"], p["habilitante_construccion"],
                     p["estado"], p["fecha_ingreso"], p["fecha_resolucion_estimada"], p["fecha_resolucion"],
                     p["tipo_resolucion"], p["hito_tramitacion"], p["incluido_catastro_hacienda"],
