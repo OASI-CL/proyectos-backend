@@ -9,6 +9,7 @@ import permisosRouter from './routes/permisos'
 import comitesRouter from './routes/comites'
 import organismosRouter from './routes/organismos'
 import catalogosRouter from './routes/catalogos'
+import catalogRouter from './routes/catalog'
 import adjuntosRouter from './routes/adjuntos'
 
 const app = express()
@@ -36,7 +37,11 @@ app.use('/proyectos', requireAuth, proyectosRouter)
 app.use('/permisos', requireAuth, permisosRouter)
 app.use('/comites', requireAuth, comitesRouter)
 app.use('/organismos', requireAuth, organismosRouter)
+// /catalogos (Spanish) still serves the older pages; /catalog is the English
+// replacement used by the dashboard. The old one goes away as those pages
+// get migrated.
 app.use('/catalogos', requireAuth, catalogosRouter)
+app.use('/catalog', requireAuth, catalogRouter)
 app.use('/adjuntos', requireAuth, adjuntosRouter)
 
 // 404 para rutas no conocidas
