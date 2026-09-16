@@ -17,6 +17,6 @@
       "shared/*": ["./src/shared/*"]
     }
   },
-  "include": ["src/**/*.ts", "handler.ts"],
+  "include": ["src/**/*.ts", "handler.ts", "scripts/**/*.ts"],
   "exclude": ["node_modules", "dist"]
 }

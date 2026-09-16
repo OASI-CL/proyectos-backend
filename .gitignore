@@ -17,3 +17,6 @@ infra/node_modules/
 infra/cdk.out/
 infra/*.js
 infra/*.d.ts
+
+# written by `cdk deploy --outputs-file` in CI
+infra/outputs.json

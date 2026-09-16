@@ -125,56 +125,31 @@ role with an HTTP header.** It exists for local work only.
 ## 4. Create the first admin
 
 Two halves, both required: Cognito holds the account, the `usuarios` table
-holds the role and the scope.
+holds the role and the scope. One script does both, for a deployed
+environment:
 
 ```bash
-POOL=us-east-1_XXXXXXXXX
-EMAIL=tu.correo@economia.gob.cl
-
-# Cognito sends an invitation with a temporary password
-aws cognito-idp admin-create-user \
-  --user-pool-id "$POOL" \
-  --username "$EMAIL" \
-  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
-                    Name=name,Value="Tu Nombre"
-
-aws cognito-idp admin-add-user-to-group \
-  --user-pool-id "$POOL" --username "$EMAIL" --group-name admin
-
-# The sub is the id the app keys off
-aws cognito-idp admin-get-user --user-pool-id "$POOL" --username "$EMAIL" \
-  --query 'UserAttributes[?Name==`sub`].Value' --output text
+cd proyectos-backend
+export AWS_PROFILE=oasi
+scripts/create-admin.sh dev tu.correo@economia.cl "Tu Nombre"
 ```
 
-Then the row in the database (locally, that is just `psql` against your dev
-instance):
+It creates the Cognito account (or reuses an existing one), adds it to the
+`admin` group, and writes the `usuarios` row through the environment's db-ops
+Lambda. A new account receives a temporary password by email; the login
+screen handles the forced change on first sign-in.
+
+For a **local** database, the second half is a plain insert:
 
 ```sql
 INSERT INTO usuarios (cognito_sub, nombre, email, rol)
-VALUES ('<sub>', 'Tu Nombre', 'tu.correo@economia.gob.cl', 'admin');
+VALUES ('<sub from admin-get-user>', 'Tu Nombre', 'tu.correo@economia.cl', 'admin');
 ```
 
-First sign-in uses the temporary password from the email; Cognito then forces
-a password change, which the login screen handles.
-
-### Scoped roles
-
-`empresa`, `organismo` and `region` need their scope, or the backend refuses
-to authenticate them (failing closed rather than showing everything):
-
-```sql
--- sees only BHP's projects
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, empresa_id)
-VALUES ('<sub>', 'Nombre', 'mail@empresa.cl', 'empresa', 1);
-
--- sees only DGA's permits
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, organismo_id)
-VALUES ('<sub>', 'Nombre', 'mail@dga.cl', 'organismo', 5);
-
--- sees every project in Antofagasta, all agencies
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, region)
-VALUES ('<sub>', 'Nombre', 'mail@gore.cl', 'region', 'Antofagasta');
-```
+Scoped roles (`empresa`, `organismo`, `region`) need their scope column
+(`empresa_id`, `organismo_id`, `region_id`), or the backend refuses to
+authenticate them — failing closed rather than showing everything. The app's
+user screen always sets it.
 
 After the first admin exists, **everyone else is created from Administración
 → Usuarios in the app** — one action does both halves: it creates the Cognito
@@ -196,17 +171,10 @@ nothing extra to configure there.
 
 ---
 
-## What this does NOT create
+## What this stack does NOT create
 
-Deliberately, so nothing starts billing before you decide:
-
-- no VPC or **NAT gateway** (~US$32/month, the main cost of the full stack)
-- no RDS instance
-- no Lambda or API Gateway
-- no S3 bucket
-
-Those live in `Oasi-<stage>`, deployed separately with
-`npx cdk deploy Oasi-dev -c stage=dev` when the API needs to be online.
+`Oasi-Auth-<stage>` is Cognito only. The network, database, API and bucket
+live in `Oasi-<stage>` — see [`DEPLOYMENT.md`](../DEPLOYMENT.md).
 
 To take Cognito down again: `npx cdk destroy Oasi-Auth-dev -c stage=dev`
 (in `dev` it deletes the pool and its users; in `prod` it is set to retain).

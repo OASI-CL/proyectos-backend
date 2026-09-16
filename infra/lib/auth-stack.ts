@@ -50,6 +50,9 @@ export class AuthStack extends cdk.Stack {
       // bringing SES into the picture.
       email: cognito.UserPoolEmail.withCognito(),
       removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      // Deleting the prod pool deletes every account in it; make that a
+      // deliberate two-step action instead of a side effect.
+      deletionProtection: isProd,
     })
 
     // One group per app role. The backend reads it from the JWT, but the

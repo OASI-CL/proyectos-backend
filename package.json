@@ -7,10 +7,11 @@
     "dev": "tsx watch src/app.local.ts",
     "build": "tsc -p tsconfig.json",
     "build:lambda": "bash scripts/build-lambda.sh",
-    "start": "node dist/handler.js",
-    "migrate": "bash scripts/migrate.sh",
+    "test:lambda": "node scripts/smoke-lambda.cjs",
+    "check": "npm run build && npm --prefix infra run build && npm run build:lambda && npm run test:lambda",
+    "start": "node dist/src/app.local.js",
+    "migrate": "tsx scripts/migrate.ts",
     "infra:diff": "cd infra && npm run diff",
-    "infra:deploy": "cd infra && npm run deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
