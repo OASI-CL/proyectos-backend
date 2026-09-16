@@ -62,10 +62,11 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
     permitWhere.push(`p.organismo_id = ${agency}`)
     projectWhere.push(`pr.id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = ${agency})`)
   } else if (user.rol === 'region') {
-    // Sees every project of its region, across all agencies.
-    const region = sql.add(user.region ?? '')
-    permitWhere.push(`p.region = ${region}`)
-    projectWhere.push(`pr.region = ${region}`)
+    // Sees every project of its region, across all agencies. Scoped by
+    // region_id (indexed integer) rather than by the region name.
+    const region = sql.add(user.regionId ?? -1)
+    permitWhere.push(`p.region_id = ${region}`)
+    projectWhere.push(`pr.region_id = ${region}`)
   }
 
   // --- Permit-level filters ---
@@ -154,6 +155,7 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
         p.proyecto_nombre            AS project_name,
         p.empresa_id                 AS company_id,
         p.empresa_nombre             AS company_name,
+        p.region_id,
         p.region,
         p.sector,
         p.etapa                      AS project_status,
@@ -179,9 +181,13 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
         pr.nombre                       AS name,
         pr.empresa_id                   AS company_id,
         pr.empresa_nombre               AS company_name,
+        pr.region_id,
         pr.region,
         pr.sector,
         pr.etapa                        AS project_status,
+        -- Stable key of the stage. Section 5 below matches on this instead of
+        -- on the display name, which is free to be reworded in the catalog.
+        pr.etapa_codigo                 AS project_status_code,
         pr.inversion_mmusd              AS investment_mmusd,
         pr.empleo_construccion          AS construction_jobs,
         pr.empleo_operacion             AS operation_jobs,
@@ -315,7 +321,7 @@ export async function fetchDashboard(
           ) ORDER BY construction_start_on
         )                                         AS projects
       FROM projects
-      WHERE project_status = 'No se ha iniciado'
+      WHERE project_status_code = 'no_iniciado'
         AND construction_start_on IS NOT NULL
         AND construction_start_on >= CURRENT_DATE
         AND construction_start_on < CURRENT_DATE + 90
@@ -338,7 +344,7 @@ export async function fetchDashboard(
           ) ORDER BY pending_permit_count, name
         )                                         AS projects
       FROM projects
-      WHERE project_status = 'No se ha iniciado'
+      WHERE project_status_code = 'no_iniciado'
         AND pending_permit_count > 0
         AND pending_permit_count < 3
     `),

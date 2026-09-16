@@ -175,9 +175,23 @@ ellos esas rutas responden 503 y el resto de la API funciona igual.
 
 ### 5. Aplicar el schema
 
+Base nueva, desde cero (deja los catálogos ya cargados):
+
 ```bash
 psql -h 127.0.0.1 -U postgres -d oasi_dev -f db/schema.sql
 ```
+
+Base que **ya tenía datos** cargados con el modelo anterior (región, sector,
+etapa y estado como texto): hay que correr la migración que los pasa a
+catálogos con id.
+
+```bash
+psql -h 127.0.0.1 -U postgres -d oasi_dev -f db/migrations/002_catalogos.sql
+```
+
+Es idempotente (se puede correr dos veces), va toda en una transacción, y si
+encuentra un valor de texto que no calza con el catálogo **falla a propósito**
+nombrándolo, en vez de dejarlo en NULL sin avisar.
 
 ### 6. Cargar los datos del Excel (opcional, para tener datos reales)
 
@@ -305,22 +319,53 @@ una columna aparte, `id_excel` (ej. `'P183'`, `'PM1377'`), que es solo
 informativo — nunca se usa como foreign key. Los proyectos/permisos creados
 desde la app tienen `id_excel = NULL`.
 
-### Tablas
+### Catálogos (vocabulario controlado, con datos semilla en `schema.sql`)
 
-`ministerios`, `organismos`, `empresas`, `proyectos`, `permisos`, `comites`,
-`permisos_comite` (relación N:N — un permiso se revisa en varias sesiones de
-comité), `usuarios`, `historial`, `adjuntos`.
+Todo lo que es una lista cerrada es una tabla con id, no texto libre. Van con
+los datos incluidos en `db/schema.sql` y con **id explícito y estable**, así
+`region_id = 3` significa lo mismo en tu base local, en dev y en producción.
+No dependen del Excel: se cargan junto con el schema.
+
+| Tabla | Contenido |
+|---|---|
+| `regiones` | Las 16 regiones de Chile: `id` (orden norte→sur), `numero` (número oficial), `codigo` (numeral romano), `nombre`, `nombre_oficial`. Más `Interregional` (90) y `Nivel Central` (91), que no son regiones reales pero vienen así en el Excel |
+| `sectores` | Sectores productivos, con `orden` de presentación |
+| `etapas_proyecto` | `no_iniciado`, `construccion`, `operacion` |
+| `estados_permiso` | `Pendiente`, `Resuelto`, `Descartado`. `es_final` marca los que cierran la tramitación, así las vistas no repiten la lista en cada cálculo |
+| `ministerios` | Los 12 ministerios, con sigla |
+| `organismos` | Los 19 organismos, cada uno con su `ministerio_id` y nombre largo |
+
+### Tablas de datos
+
+`empresas`, `proyectos`, `permisos`, `comites`, `permisos_comite` (relación
+N:N — un permiso se revisa en varias sesiones de comité), `usuarios`,
+`solicitudes_cambio`, `historial`, `adjuntos`.
 
 ### Vistas (todo valor calculado vive acá, nunca en una columna)
 
+Las vistas además **resuelven los catálogos**: exponen el nombre legible con
+el mismo nombre de columna de siempre (`region`, `sector`, `etapa`, `estado`)
+y también el `_id`. Por eso un filtro por nombre y uno por id funcionan los
+dos, y normalizar los catálogos no rompió el frontend.
+
 | Vista | Qué entrega |
 |---|---|
-| `v_permisos` | Permiso + proyecto + organismo, con `dias_tramitacion`, `menos_3_meses`, `entre_3_y_6_meses`, `supera_6_meses`, `semaforo`, calculados contra `CURRENT_DATE` |
-| `v_proyectos` | Proyecto + `total_permisos`, `permisos_pendientes`, `permisos_6meses`, `criticos_pendientes`, `sin_pendientes` |
+| `v_permisos` | Permiso + proyecto + organismo + catálogos resueltos, con `dias_tramitacion`, `menos_3_meses`, `entre_3_y_6_meses`, `supera_6_meses`, `semaforo`, calculados contra `CURRENT_DATE` |
+| `v_proyectos` | Proyecto + catálogos + `total_permisos`, `permisos_pendientes`, `permisos_6meses`, `criticos_pendientes`, `sin_pendientes` |
 | `v_permisos_comite` | Igual que `v_permisos` pero calculado a la fecha del comité (`c.fecha`), no de hoy — reconstruye la tabla exacta presentada en cada sesión |
 | `v_resumen_comite` | Una fila por sesión: permisos en agenda, resueltos, promedio de días |
 | `v_resumen_organismo` | Por organismo: pendientes, +6 meses, promedio de días, inversión bloqueada |
+| `v_usuarios` | Usuario con su alcance resuelto a nombres (empresa / organismo / región) |
 | `v_historial` | Historial de cambios con nombre de usuario legible (join con `usuarios`) |
+| `v_solicitudes_cambio` | Solicitudes con nombre de la entidad, de quien la pidió, y las columnas de alcance que usa la cola de aprobaciones |
+
+### Dónde ver qué columnas tiene cada entidad
+
+Cada archivo de `src/models/` arranca con la lista completa de columnas de su
+entidad, en dos interfaces: las de la tabla base y las que **agrega la vista**
+encima (catálogos resueltos y valores derivados), con el comentario de cada
+campo cuando el dato tiene alguna trampa. Están verificadas contra la base, no
+escritas de memoria. Es el lugar para mirar antes de agregar un endpoint.
 
 ### Auditoría
 

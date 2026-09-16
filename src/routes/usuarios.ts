@@ -39,21 +39,33 @@ function validarScope(
   rol: RolUsuario,
   empresaId: unknown,
   organismoId: unknown,
-  region: unknown,
+  regionId: unknown,
 ): string | null {
   if (!ROLES.includes(rol)) return `Rol inválido. Válidos: ${ROLES.join(', ')}`
   if (rol === 'empresa' && !empresaId) return 'El rol empresa necesita una empresa asignada'
   if (rol === 'organismo' && !organismoId) return 'El rol organismo necesita un organismo asignado'
-  if (rol === 'region' && !region) return 'El rol region necesita una región asignada'
+  if (rol === 'region' && !regionId) return 'El rol region necesita una región asignada'
   return null
 }
 
-/** Clears the scope fields that do not belong to the role. */
+/**
+ * Clears the scope fields that do not belong to the role.
+ *
+ * The region scope is a catalog id now (`usuarios.region_id`), so the body
+ * carries `region_id`. A non-numeric or missing value becomes null and
+ * validarScope rejects it, rather than reaching the DB as NaN.
+ */
+function numeroONull(valor: unknown): number | null {
+  if (valor === null || valor === undefined || valor === '') return null
+  const n = Number(valor)
+  return Number.isFinite(n) ? n : null
+}
+
 function normalizarScope(rol: RolUsuario, body: Record<string, unknown>) {
   return {
-    empresaId: rol === 'empresa' ? Number(body.empresa_id ?? body.empresaId) : null,
-    organismoId: rol === 'organismo' ? Number(body.organismo_id ?? body.organismoId) : null,
-    region: rol === 'region' ? String(body.region ?? '') : null,
+    empresaId: rol === 'empresa' ? numeroONull(body.empresa_id ?? body.empresaId) : null,
+    organismoId: rol === 'organismo' ? numeroONull(body.organismo_id ?? body.organismoId) : null,
+    regionId: rol === 'region' ? numeroONull(body.region_id ?? body.regionId) : null,
   }
 }
 
@@ -83,7 +95,7 @@ router.post('/', requireRol('admin'), async (req, res, next) => {
   }
 
   const scope = normalizarScope(rol, b)
-  const errorScope = validarScope(rol, scope.empresaId, scope.organismoId, scope.region)
+  const errorScope = validarScope(rol, scope.empresaId, scope.organismoId, scope.regionId)
   if (errorScope) return res.status(400).json({ error: 'datos_invalidos', message: errorScope })
 
   let sub: string
@@ -101,7 +113,7 @@ router.post('/', requireRol('admin'), async (req, res, next) => {
       sub, nombre, email, rol,
       empresaId: scope.empresaId,
       organismoId: scope.organismoId,
-      region: scope.region,
+      regionId: scope.regionId,
       creadoPorSub: req.user!.sub,
     })
     res.status(201).json(camelizeRow(usuario))
@@ -136,7 +148,7 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
 
     const rol = (b.rol ?? previo.rol) as RolUsuario
     const scope = normalizarScope(rol, { ...previo, ...b })
-    const errorScope = validarScope(rol, scope.empresaId, scope.organismoId, scope.region)
+    const errorScope = validarScope(rol, scope.empresaId, scope.organismoId, scope.regionId)
     if (errorScope) return res.status(400).json({ error: 'datos_invalidos', message: errorScope })
 
     // Refuse to strip the last admin's own admin role via a self-edit gone
@@ -156,7 +168,7 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
       rol,
       empresaId: scope.empresaId,
       organismoId: scope.organismoId,
-      region: scope.region,
+      regionId: scope.regionId,
       actualizadoPorSub: req.user!.sub,
     })
 

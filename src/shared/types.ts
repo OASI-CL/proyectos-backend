@@ -20,7 +20,26 @@
  */
 export type RolUsuario = 'admin' | 'oasi' | 'organismo' | 'empresa' | 'region'
 
+/**
+ * Display name of a permit state, as every view exposes it under `estado`.
+ *
+ * DECISION: `estado` is now a FK (`permisos.estado_id` -> `estados_permiso`),
+ * but this type stays a union of the NAMES rather than becoming a number.
+ * Reason: everything that reads a permit reads it through a view, and the
+ * views resolve the catalog, so `estado` is still a string everywhere in the
+ * UI and in the filter query params. Ids appear only where a row is written
+ * (`estado_id`) or where the catalog itself is listed, and they are typed as
+ * plain `number` there. Keeping the union means the badge components, the CSV
+ * export and the filter bar did not have to change at all.
+ *
+ * `EstadoPermisoCodigo` is the stable machine-readable key (`estado_codigo`
+ * on the views) — prefer it over the display name in new code.
+ */
 export type EstadoPermiso = 'Pendiente' | 'Resuelto' | 'Descartado'
+
+export type EstadoPermisoCodigo = 'pendiente' | 'resuelto' | 'descartado'
+
+export type EtapaProyectoCodigo = 'no_iniciado' | 'construccion' | 'operacion'
 
 export type EstadoValidacion = 'borrador' | 'en_revision' | 'validado'
 
@@ -44,20 +63,79 @@ export interface Auditoria {
 export interface Ministerio {
   id: number
   nombre: string
+  /** 'MOP', 'MINVU', ... NULL for 'Municipalidades'. */
+  sigla: string | null
 }
 
 export interface Organismo {
   id: number
+  /** Sigla as it comes from the source Excel. Display only, never a FK. */
   id_excel: string | null
+  /** Sigla it is known by, e.g. 'CONAF'. */
   nombre: string
+  /** Full name, for formal reports. */
+  nombre_largo: string | null
   ministerio_id: number
 }
 
 export interface Empresa extends Auditoria {
   id: number
+  /** 'E100', etc. NULL when the company was created from the app. */
   id_excel: string | null
   nombre: string
+  /** Legal name, when it differs from `nombre`. */
+  razon_social: string | null
   rut: string | null
+  email_contacto: string | null
+  telefono_contacto: string | null
+  /** false = not offered when creating new projects. */
+  activa: boolean
+}
+
+/**
+ * Chilean region.
+ *
+ * `id` is the geographic order north -> south (that is the display order);
+ * `numero` is the official region number. Ids 90 ('Interregional') and 91
+ * ('Nivel Central') are not real regions but come that way in the source
+ * Excel — projects spanning several regions, or handled centrally — and
+ * carry NULL in `numero` / `codigo`.
+ */
+export interface Region {
+  id: number
+  numero: number | null
+  /** Roman numeral it is usually called by ('II', 'RM', ...). */
+  codigo: string | null
+  nombre: string
+  nombre_oficial: string | null
+}
+
+export interface Sector {
+  id: number
+  nombre: string
+  /** Presentation order in dropdowns and charts. */
+  orden: number
+}
+
+export interface EtapaProyecto {
+  id: number
+  codigo: EtapaProyectoCodigo
+  nombre: string
+  /** Real project progress, for sorting. */
+  orden: number
+}
+
+/**
+ * Row of the `estados_permiso` catalog. Named with the `Catalogo` suffix
+ * because `EstadoPermiso` above is the display-name union (see its comment).
+ */
+export interface EstadoPermisoCatalogo {
+  id: number
+  codigo: EstadoPermisoCodigo
+  nombre: EstadoPermiso
+  /** true for the states that close the process ('Resuelto', 'Descartado'). */
+  es_final: boolean
+  orden: number
 }
 
 // --- Proyectos ----------------------------------------------------------------
@@ -68,13 +146,13 @@ export interface Proyecto extends Auditoria {
   nombre: string
   titular: string | null
   empresa_id: number
-  region: string | null
-  sector: string | null
+  region_id: number | null
+  sector_id: number | null
+  etapa_id: number | null
   inversion_mmusd: number | null
   empleo_construccion: number | null
   empleo_operacion: number | null
   estado_ambiental: string | null
-  etapa: string | null
   fecha_inicio_construccion: string | null
   fecha_inicio_operacion: string | null
   habilitantes_aprobado: boolean | null
@@ -98,7 +176,7 @@ export interface Permiso extends Auditoria {
   critico: boolean
   que_habilita: string | null
   habilitante_construccion: boolean
-  estado: EstadoPermiso
+  estado_id: number
   fecha_ingreso: string | null
   fecha_resolucion_estimada: string | null
   fecha_resolucion: string | null
@@ -122,7 +200,7 @@ export interface PermisoComite {
   id: number
   permiso_id: number
   comite_id: number
-  estado_snapshot: EstadoPermiso | null
+  estado_snapshot_id: number | null
   dias_snapshot: number | null
   compromiso: string | null
 }
@@ -137,7 +215,14 @@ export interface Usuario extends Auditoria {
   rol: RolUsuario
   empresa_id: number | null
   organismo_id: number | null
-  /** Scope of the 'region' role (regions are free text on proyectos). */
+  /** Scope of the 'region' role. FK to regiones. */
+  region_id: number | null
+}
+
+/** v_usuarios: the user with its scope resolved to readable names. */
+export interface VUsuario extends Usuario {
+  empresa_nombre: string | null
+  organismo_nombre: string | null
   region: string | null
 }
 
@@ -170,7 +255,9 @@ export interface VSolicitudCambio extends SolicitudCambio {
   entidad_id_excel: string | null
   empresa_id: number | null
   empresa_nombre: string | null
+  organismo_id: number | null
   organismo_nombre: string | null
+  region_id: number | null
   region: string | null
 }
 
@@ -206,6 +293,11 @@ export interface Adjunto {
 
 /** v_permisos: calculado contra CURRENT_DATE. */
 export interface VPermiso extends Permiso {
+  /** Catálogo estados_permiso resuelto. */
+  estado: EstadoPermiso
+  estado_codigo: EstadoPermisoCodigo
+  /** true en 'Resuelto'/'Descartado': la tramitación terminó. */
+  estado_es_final: boolean
   proyecto_nombre: string
   proyecto_id_excel: string | null
   organismo_nombre: string
@@ -214,8 +306,11 @@ export interface VPermiso extends Permiso {
   empresa_id: number
   empresa_nombre: string
   /** Del proyecto: la página de Permisos filtra por estos campos. */
+  region_id: number | null
   region: string | null
+  sector_id: number | null
   sector: string | null
+  etapa_id: number | null
   etapa: string | null
   inversion_mmusd: number | null
   dias_tramitacion: number | null
@@ -228,6 +323,13 @@ export interface VPermiso extends Permiso {
 /** v_proyectos: proyecto + conteos de sus permisos. */
 export interface VProyecto extends Proyecto {
   empresa_nombre: string
+  /** Catálogos resueltos a nombre legible. */
+  region: string | null
+  region_numero: number | null
+  region_codigo: string | null
+  sector: string | null
+  etapa: string | null
+  etapa_codigo: EtapaProyectoCodigo | null
   total_permisos: number
   permisos_pendientes: number
   permisos_6meses: number
@@ -235,8 +337,11 @@ export interface VProyecto extends Proyecto {
   sin_pendientes: boolean
 }
 
-/** v_permisos_comite: lo mismo que v_permisos pero a la fecha del comité. */
-export interface VPermisoComite extends VPermiso {
+/**
+ * v_permisos_comite: lo mismo que v_permisos pero a la fecha del comité.
+ * No trae `semaforo` ni `estado_es_final` (son relativos a CURRENT_DATE).
+ */
+export interface VPermisoComite extends Omit<VPermiso, 'semaforo' | 'estado_es_final'> {
   comite_id: number
   comite_numero: number
   comite_fecha: string
@@ -274,8 +379,12 @@ export interface FiltrosPermisos {
   estado?: EstadoPermiso
   tramo?: TramoTramitacion
   semaforo?: Semaforo
+  /** Por nombre (lo que manda la UI) o por id de catálogo, indistinto. */
   region?: string
+  region_id?: number
   sector?: string
+  sector_id?: number
+  estado_id?: number
   critico?: boolean
   habilitante?: boolean
   fecha_ingreso_desde?: string
@@ -286,9 +395,13 @@ export interface FiltrosPermisos {
 
 export interface FiltrosProyectos {
   empresa_id?: number
+  /** Por nombre (lo que manda la UI) o por id de catálogo, indistinto. */
   sector?: string
+  sector_id?: number
   region?: string
+  region_id?: number
   etapa?: string
+  etapa_id?: number
   con_permisos_6meses?: boolean
   sin_pendientes?: boolean
   id_excel?: string

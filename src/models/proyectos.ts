@@ -1,14 +1,103 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
+import type { EstadoValidacion, EtapaProyectoCodigo } from '../shared/types'
+
+/**
+ * ============================================================================
+ * PROYECTO — todas las columnas que tiene la entidad.
+ *
+ * Esta es la lista completa y verificada contra la base (`\d proyectos` y
+ * `\d v_proyectos`). Sirve para saber qué se puede exponer en un endpoint
+ * nuevo sin tener que abrir psql.
+ *
+ * Casi todo lo que devuelve la API sale de la VISTA `v_proyectos`, no de la
+ * tabla: la vista resuelve los catálogos (region_id -> "Antofagasta") y
+ * agrega los conteos de permisos. Escribir, en cambio, es siempre contra la
+ * tabla base `proyectos` y con los *_id.
+ * ============================================================================
+ */
+
+/** Columnas propias de la tabla base `proyectos`. */
+export interface Proyecto {
+  id: number
+  /** 'P183', etc. NULL si el proyecto se creó desde la app. Solo display, nunca FK. */
+  id_excel: string | null
+  nombre: string
+  /** Razón social del titular. Puede diferir del nombre de la empresa. */
+  titular: string | null
+  empresa_id: number
+  /** FK a `regiones`. Ver el catálogo: 90 = Interregional, 91 = Nivel Central. */
+  region_id: number | null
+  /** FK a `sectores`. */
+  sector_id: number | null
+  /** FK a `etapas_proyecto`. */
+  etapa_id: number | null
+  inversion_mmusd: number | null
+  empleo_construccion: number | null
+  empleo_operacion: number | null
+  /**
+   * Estado ambiental (RCA), ej. 'RCA aprobada'. Texto libre y CASI VACÍO en el
+   * Excel origen: 314 de 317 proyectos no lo traen. Ver rcaStatusSql() en
+   * db/sql.ts, que lo normaliza a approved/in_review/suspended/other/unknown.
+   */
+  estado_ambiental: string | null
+  fecha_inicio_construccion: string | null
+  fecha_inicio_operacion: string | null
+  /** '¿Habilitantes Aprobado?' del Excel origen. */
+  habilitantes_aprobado: boolean | null
+  /** Ingreso del proyecto al universo OASI (no al trámite de un permiso). */
+  fecha_ingreso: string | null
+  fecha_ultima_resolucion: string | null
+  observaciones_oasi: string | null
+  /** 'borrador' | 'en_revision' | 'validado'. Solo 'validado' entra a los reportes. */
+  estado_validacion: EstadoValidacion
+  // --- Auditoría (updated_at lo pone el trigger, nunca a mano) ---
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/**
+ * Columnas que AGREGA la vista `v_proyectos` sobre la tabla.
+ * Ninguna existe como columna: son catálogos resueltos o agregados.
+ */
+export interface VProyecto extends Proyecto {
+  // --- Catálogos resueltos a nombre legible ---
+  empresa_nombre: string
+  /** Nombre de la región de region_id. Los filtros por nombre siguen andando. */
+  region: string | null
+  /** Número oficial de la región. NULL en Interregional / Nivel Central. */
+  region_numero: number | null
+  /** Numeral romano ('II', 'RM', ...). NULL en las dos pseudo-regiones. */
+  region_codigo: string | null
+  sector: string | null
+  etapa: string | null
+  /** Clave estable de la etapa. Preferirla al nombre en código nuevo. */
+  etapa_codigo: EtapaProyectoCodigo | null
+  // --- Agregados sobre los permisos del proyecto ---
+  total_permisos: number
+  permisos_pendientes: number
+  /** Pendientes con más de 180 días desde su fecha_ingreso. */
+  permisos_6meses: number
+  criticos_pendientes: number
+  /** true cuando no le queda ningún permiso pendiente. */
+  sin_pendientes: boolean
+}
 
 export function filtrosProyectos(wb: WhereBuilder, q: Record<string, unknown>) {
   const s = (k: string) => (typeof q[k] === 'string' && q[k] !== '' ? String(q[k]) : undefined)
   const n = (k: string) => (s(k) !== undefined && !Number.isNaN(Number(s(k))) ? Number(s(k)) : undefined)
 
   if (n('empresa_id') !== undefined) wb.add((i) => `empresa_id = $${i}`, n('empresa_id'))
+  // Región/sector/etapa aceptan el nombre (lo que manda la barra de filtros,
+  // la vista lo sigue exponiendo) o el id del catálogo.
   if (s('sector')) wb.add((i) => `sector = $${i}`, s('sector'))
+  if (n('sector_id') !== undefined) wb.add((i) => `sector_id = $${i}`, n('sector_id'))
   if (s('region')) wb.add((i) => `region = $${i}`, s('region'))
+  if (n('region_id') !== undefined) wb.add((i) => `region_id = $${i}`, n('region_id'))
   if (s('etapa')) wb.add((i) => `etapa = $${i}`, s('etapa'))
+  if (n('etapa_id') !== undefined) wb.add((i) => `etapa_id = $${i}`, n('etapa_id'))
   if (s('id_excel')) wb.add((i) => `id_excel = $${i}`, s('id_excel'))
   if (s('con_permisos_6meses') === 'true') wb.addRaw('permisos_6meses > 0')
   if (s('sin_pendientes') === 'true') wb.addRaw('sin_pendientes IS TRUE')
@@ -72,12 +161,13 @@ export interface DatosProyectoNuevo {
   nombre: string
   titular?: unknown
   empresaId: unknown
-  region?: unknown
-  sector?: unknown
+  /** Ids de catálogo (regiones / sectores / etapas_proyecto), no nombres. */
+  regionId?: unknown
+  sectorId?: unknown
+  etapaId?: unknown
   inversionMmusd?: unknown
   empleoConstruccion?: unknown
   empleoOperacion?: unknown
-  etapa?: unknown
   estadoAmbiental?: unknown
   fechaInicioConstruccion?: unknown
   fechaInicioOperacion?: unknown
@@ -90,16 +180,17 @@ export interface DatosProyectoNuevo {
 export async function crearProyecto(client: PoolClient, datos: DatosProyectoNuevo) {
   const { rows } = await client.query(
     `INSERT INTO proyectos (
-       nombre, titular, empresa_id, region, sector, inversion_mmusd,
-       empleo_construccion, empleo_operacion, etapa, estado_ambiental,
+       nombre, titular, empresa_id, region_id, sector_id, inversion_mmusd,
+       empleo_construccion, empleo_operacion, etapa_id, estado_ambiental,
        fecha_inicio_construccion, fecha_inicio_operacion, observaciones_oasi,
        estado_validacion, created_by, updated_by
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
      RETURNING *`,
     [
-      datos.nombre, datos.titular ?? null, datos.empresaId, datos.region ?? null, datos.sector ?? null,
+      datos.nombre, datos.titular ?? null, datos.empresaId,
+      datos.regionId ?? null, datos.sectorId ?? null,
       datos.inversionMmusd ?? null, datos.empleoConstruccion ?? null, datos.empleoOperacion ?? null,
-      datos.etapa ?? null, datos.estadoAmbiental ?? null, datos.fechaInicioConstruccion || null,
+      datos.etapaId ?? null, datos.estadoAmbiental ?? null, datos.fechaInicioConstruccion || null,
       datos.fechaInicioOperacion || null, datos.observacionesOasi ?? null,
       datos.estadoValidacion, datos.creadoPorSub,
     ],
@@ -117,7 +208,8 @@ export interface DatosPermisoNuevo {
   critico?: unknown
   queHabilita?: unknown
   habilitanteConstruccion?: unknown
-  estado?: unknown
+  /** Id del catálogo `estados_permiso`. Si no viene, queda 1 = Pendiente. */
+  estadoId?: unknown
   fechaIngreso?: unknown
   fechaResolucionEstimada?: unknown
   observaciones?: unknown
@@ -130,7 +222,7 @@ export async function crearPermisoDeProyecto(client: PoolClient, datos: DatosPer
   const { rows } = await client.query(
     `INSERT INTO permisos (
        proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
-       n_expediente, critico, que_habilita, habilitante_construccion, estado,
+       n_expediente, critico, que_habilita, habilitante_construccion, estado_id,
        fecha_ingreso, fecha_resolucion_estimada, observaciones,
        estado_validacion, created_by, updated_by
      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
@@ -139,7 +231,8 @@ export async function crearPermisoDeProyecto(client: PoolClient, datos: DatosPer
       datos.proyectoId, datos.organismoId, datos.nombre, datos.nombreEstandar ?? null,
       datos.tipoPermiso ?? null, datos.nExpediente ?? null, datos.critico ?? false,
       datos.queHabilita ?? null, datos.habilitanteConstruccion ?? false,
-      datos.estado ?? 'Pendiente', datos.fechaIngreso || null,
+      // 1 = 'Pendiente' (id explícito y estable del catálogo estados_permiso).
+      datos.estadoId ?? 1, datos.fechaIngreso || null,
       datos.fechaResolucionEstimada || null, datos.observaciones ?? null,
       datos.estadoValidacion, datos.creadoPorSub,
     ],

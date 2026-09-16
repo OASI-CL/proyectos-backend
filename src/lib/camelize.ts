@@ -8,7 +8,10 @@ function toCamel(key: string): string {
   return key.replace(/_([a-z0-9])/g, (_, char: string) => char.toUpperCase())
 }
 
-export function camelizeRow<T extends Record<string, unknown>>(row: T): Record<string, unknown> {
+// `object` rather than Record<string, unknown>: rows now come back typed as
+// the model interfaces (VUsuario, VProyecto, ...), which have no index
+// signature and so would not satisfy Record<string, unknown>.
+export function camelizeRow(row: object): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [key, value] of Object.entries(row)) {
     out[toCamel(key)] = value
@@ -16,6 +19,6 @@ export function camelizeRow<T extends Record<string, unknown>>(row: T): Record<s
   return out
 }
 
-export function camelizeRows(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+export function camelizeRows(rows: object[]): Record<string, unknown>[] {
   return rows.map(camelizeRow)
 }

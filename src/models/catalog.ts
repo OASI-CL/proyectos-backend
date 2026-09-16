@@ -14,13 +14,13 @@ import { rcaStatusSql } from '../db/sql'
 // ---------------------------------------------------------------------------
 
 export async function listMinisterios(db: Pool | PoolClient) {
-  const { rows } = await db.query('SELECT id, nombre FROM ministerios ORDER BY nombre')
+  const { rows } = await db.query('SELECT id, nombre, sigla FROM ministerios ORDER BY nombre')
   return rows
 }
 
 export async function listOrganismosConMinisterio(db: Pool | PoolClient) {
   const { rows } = await db.query(
-    `SELECT o.id, o.nombre, o.ministerio_id, m.nombre AS ministerio_nombre
+    `SELECT o.id, o.nombre, o.nombre_largo, o.ministerio_id, m.nombre AS ministerio_nombre
        FROM organismos o JOIN ministerios m ON m.id = o.ministerio_id
       ORDER BY o.nombre`,
   )
@@ -28,20 +28,60 @@ export async function listOrganismosConMinisterio(db: Pool | PoolClient) {
 }
 
 export async function listEmpresas(db: Pool | PoolClient) {
-  const { rows } = await db.query('SELECT id, id_excel, nombre FROM empresas ORDER BY nombre')
+  // No `WHERE activa` on purpose: this list also feeds the filter bars, and a
+  // company that is no longer offered for NEW projects still has old ones that
+  // must stay filterable.
+  const { rows } = await db.query(
+    'SELECT id, id_excel, nombre, activa FROM empresas ORDER BY nombre',
+  )
   return rows
 }
 
-/** Distinct values for a proyectos column (region/sector/etapa), unscoped. */
-export async function listDistinctProyectoValues(
-  db: Pool | PoolClient,
-  columna: 'region' | 'sector' | 'etapa',
-): Promise<string[]> {
+// ---------------------------------------------------------------------------
+// Controlled vocabularies.
+//
+// These used to be a SELECT DISTINCT over the free-text columns of
+// `proyectos`, which meant the dropdowns only offered values some project
+// already had — and offered every typo along with them. They are catalog
+// tables now, so each one is read straight from its table, in the order the
+// catalog itself defines (`orden`, falling back to the id, which for regiones
+// IS the north-to-south display order).
+//
+// Every one of them returns `{ id, nombre }`: the id is what a write needs
+// (proyectos.region_id, permisos.estado_id) and the nombre is both what the
+// user sees and what the existing name-based filters send back.
+// ---------------------------------------------------------------------------
+
+export interface ItemCatalogo {
+  id: number
+  nombre: string
+}
+
+/** Regions, north to south (that is what `regiones.id` orders by). */
+export async function listRegiones(db: Pool | PoolClient): Promise<ItemCatalogo[]> {
   const { rows } = await db.query(
-    `SELECT DISTINCT ${columna} AS valor FROM proyectos
-      WHERE ${columna} IS NOT NULL ORDER BY valor`,
+    'SELECT id, nombre, numero, codigo FROM regiones ORDER BY id',
   )
-  return rows.map((r) => r.valor)
+  return rows
+}
+
+export async function listSectores(db: Pool | PoolClient): Promise<ItemCatalogo[]> {
+  const { rows } = await db.query('SELECT id, nombre FROM sectores ORDER BY orden, nombre')
+  return rows
+}
+
+export async function listEtapas(db: Pool | PoolClient): Promise<ItemCatalogo[]> {
+  const { rows } = await db.query(
+    'SELECT id, nombre, codigo FROM etapas_proyecto ORDER BY orden, id',
+  )
+  return rows
+}
+
+export async function listEstadosPermiso(db: Pool | PoolClient): Promise<ItemCatalogo[]> {
+  const { rows } = await db.query(
+    'SELECT id, nombre, codigo, es_final FROM estados_permiso ORDER BY orden, id',
+  )
+  return rows
 }
 
 // ---------------------------------------------------------------------------

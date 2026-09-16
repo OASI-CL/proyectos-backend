@@ -58,8 +58,11 @@ export class WhereBuilder {
 /**
  * Scopes a query against v_permisos (or v_permisos_comite, same columns).
  *
- * A scoped role whose scope is missing gets -1 / '' so it matches nothing —
+ * A scoped role whose scope is missing gets -1 so it matches nothing —
  * failing closed is better than leaking the whole table.
+ *
+ * The region filter is on `region_id`, not on the region name: an indexed
+ * integer comparison that cannot drift with accents or spelling.
  */
 export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado) {
   if (user.rol === 'empresa') {
@@ -67,7 +70,7 @@ export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado) {
   } else if (user.rol === 'organismo') {
     wb.add((n) => `organismo_id = $${n}`, user.organismoId ?? -1)
   } else if (user.rol === 'region') {
-    wb.add((n) => `region = $${n}`, user.region ?? '')
+    wb.add((n) => `region_id = $${n}`, user.regionId ?? -1)
   }
   return wb
 }
@@ -87,7 +90,7 @@ export function scopeProyectos(wb: WhereBuilder, user: UsuarioAutenticado) {
       user.organismoId ?? -1,
     )
   } else if (user.rol === 'region') {
-    wb.add((n) => `region = $${n}`, user.region ?? '')
+    wb.add((n) => `region_id = $${n}`, user.regionId ?? -1)
   }
   return wb
 }

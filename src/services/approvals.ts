@@ -21,17 +21,28 @@ import type { EntidadSolicitud } from '../shared/types'
  *                and writes the usual historial rows, inside one transaction.
  */
 
-/** Columns a change request is allowed to touch, per entity. */
+/**
+ * Columns a change request is allowed to touch, per entity.
+ *
+ * These names are used verbatim as column names in the UPDATE below, so they
+ * must be columns of the BASE table, not of the view. That is why the
+ * controlled vocabularies appear here as `estado_id` / `region_id` /
+ * `sector_id` / `etapa_id`: the text columns they replaced no longer exist.
+ *
+ * The change log stays readable regardless: registrarCambios() resolves these
+ * ids back to catalog names before writing the historial rows, so an entry
+ * reads "region: Antofagasta -> Metropolitana", not "region_id: 3 -> 7".
+ */
 const CAMPOS_EDITABLES: Record<EntidadSolicitud, string[]> = {
   permiso: [
     'nombre', 'nombre_estandar', 'tipo_permiso', 'n_expediente', 'critico',
-    'que_habilita', 'habilitante_construccion', 'estado', 'fecha_ingreso',
+    'que_habilita', 'habilitante_construccion', 'estado_id', 'fecha_ingreso',
     'fecha_resolucion_estimada', 'fecha_resolucion', 'tipo_resolucion',
     'hito_tramitacion', 'incluido_catastro_hacienda', 'n_catastro', 'observaciones',
   ],
   proyecto: [
-    'nombre', 'titular', 'region', 'sector', 'inversion_mmusd',
-    'empleo_construccion', 'empleo_operacion', 'estado_ambiental', 'etapa',
+    'nombre', 'titular', 'region_id', 'sector_id', 'inversion_mmusd',
+    'empleo_construccion', 'empleo_operacion', 'estado_ambiental', 'etapa_id',
     'fecha_inicio_construccion', 'fecha_inicio_operacion', 'observaciones_oasi',
   ],
 }

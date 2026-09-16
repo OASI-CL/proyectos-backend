@@ -39,12 +39,16 @@ export class SqlParams {
  * source spreadsheet ("Supera 6 Meses").
  *
  * Expects the source table aliased as `p` (v_permisos).
+ *
+ * "Finished" is read off `p.estado_es_final`, the flag the estados_permiso
+ * catalog carries, instead of repeating the ('Resuelto', 'Descartado') list:
+ * adding a fourth closing state tomorrow only needs a row in the catalog.
  */
 export const OVERDUE_THRESHOLD_DAYS = 180
 
 export const PERMIT_TRACKING_STATUS_SQL = `
   CASE
-    WHEN p.estado IN ('Resuelto', 'Descartado') THEN 'resolved'
+    WHEN p.estado_es_final THEN 'resolved'
     WHEN p.fecha_resolucion_estimada IS NOT NULL
          AND p.fecha_resolucion_estimada < CURRENT_DATE THEN 'overdue'
     WHEN p.fecha_resolucion_estimada IS NULL
@@ -58,7 +62,7 @@ export const PERMIT_TRACKING_STATUS_SQL = `
  */
 export const OVERDUE_DAYS_SQL = `
   CASE
-    WHEN p.estado IN ('Resuelto', 'Descartado') THEN NULL
+    WHEN p.estado_es_final THEN NULL
     WHEN p.fecha_resolucion_estimada IS NOT NULL
       THEN GREATEST(CURRENT_DATE - p.fecha_resolucion_estimada, 0)
     WHEN p.dias_tramitacion > ${OVERDUE_THRESHOLD_DAYS}

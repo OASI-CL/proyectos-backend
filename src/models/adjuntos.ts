@@ -2,6 +2,35 @@ import type { Pool, PoolClient } from 'pg'
 import type { UsuarioAutenticado } from '../middleware/auth'
 import { WhereBuilder, scopePermisos } from '../middleware/scope'
 
+/**
+ * ============================================================================
+ * ADJUNTO — metadata de un archivo de un permiso.
+ *
+ * El archivo en sí vive en S3; acá solo va la metadata. Verificado contra
+ * `\d adjuntos`.
+ * ============================================================================
+ */
+
+export interface Adjunto {
+  id: number
+  /** FK a permisos. ON DELETE CASCADE: borrar el permiso borra sus adjuntos. */
+  permiso_id: number
+  /** Nombre original del archivo, el que ve y descarga el usuario. */
+  nombre_archivo: string
+  /** Ruta del objeto en S3. Es la ubicación real del archivo. */
+  s3_key: string
+  content_type: string | null
+  size_bytes: number | null
+  /** cognito_sub de quien lo subió (no el id de usuarios). */
+  uploaded_by: string
+  created_at: string
+}
+
+/** Lo que agrega listAdjuntosPorPermiso sobre la tabla (join con usuarios). */
+export interface AdjuntoConUsuario extends Adjunto {
+  subido_por_nombre: string | null
+}
+
 /** Verifica que el permiso exista y esté dentro del scope del usuario. */
 export async function permisoVisible(
   db: Pool | PoolClient,

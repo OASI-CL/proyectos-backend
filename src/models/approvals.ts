@@ -1,6 +1,60 @@
 import type { Pool, PoolClient } from 'pg'
 import type { UsuarioAutenticado } from '../middleware/auth'
 import { WhereBuilder, puedeAprobar } from '../middleware/scope'
+import type { EntidadSolicitud, EstadoSolicitud, TipoSolicitud } from '../shared/types'
+
+/**
+ * ============================================================================
+ * SOLICITUD DE CAMBIO — la cola de aprobaciones.
+ *
+ * Verificado contra `\d solicitudes_cambio` y `\d v_solicitudes_cambio`.
+ * ============================================================================
+ */
+
+/** Columnas de la tabla base `solicitudes_cambio`. */
+export interface SolicitudCambio {
+  id: number
+  entidad: EntidadSolicitud
+  /** Id del proyecto o del permiso. No es FK: apunta a una tabla u otra. */
+  entidad_id: number
+  /**
+   * 'creacion' -> la fila ya existe con estado_validacion='en_revision';
+   *               aprobar la pasa a 'validado' y `cambios` va vacío.
+   * 'edicion'  -> `cambios` trae los valores propuestos.
+   */
+  tipo: TipoSolicitud
+  cambios: Record<string, unknown>
+  estado: EstadoSolicitud
+  /** Comentario de quien la envió. */
+  comentario: string | null
+  /** cognito_sub de quien la envió. */
+  solicitado_por: string
+  solicitado_at: string
+  revisado_por: string | null
+  revisado_at: string | null
+  /** Comentario de quien la aprobó o rechazó. */
+  comentario_revision: string | null
+}
+
+/**
+ * Columnas que AGREGA la vista `v_solicitudes_cambio`: el contexto que
+ * necesita la pantalla de aprobaciones, para no hacer tres round trips por
+ * fila, más las columnas de alcance con las que se filtra la cola.
+ */
+export interface VSolicitudCambio extends SolicitudCambio {
+  solicitado_por_nombre: string | null
+  revisado_por_nombre: string | null
+  /** Nombre del proyecto o del permiso al que apunta entidad_id. */
+  entidad_nombre: string | null
+  entidad_id_excel: string | null
+  // --- Columnas de alcance (ver scopeSolicitudes más abajo) ---
+  empresa_id: number | null
+  empresa_nombre: string | null
+  organismo_id: number | null
+  organismo_nombre: string | null
+  region_id: number | null
+  region: string | null
+}
 
 /**
  * Scoping for the approvals queue (v_solicitudes_cambio).
@@ -19,7 +73,7 @@ export function scopeSolicitudes(wb: WhereBuilder, user: UsuarioAutenticado | un
   } else if (user.rol === 'organismo') {
     wb.add((n) => `organismo_id = $${n}`, user.organismoId ?? -1)
   } else if (user.rol === 'region') {
-    wb.add((n) => `region = $${n}`, user.region ?? '')
+    wb.add((n) => `region_id = $${n}`, user.regionId ?? -1)
   }
   return wb
 }

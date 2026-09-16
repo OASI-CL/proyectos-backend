@@ -15,13 +15,25 @@ Decisiones de limpieza (ver notas en cada función):
     cualquier otra cosa (texto largo, número, vacío) -> false, ya que
     critico/habilitante son NOT NULL en el schema (ver shared/types.ts)
   - Sectores: se unifican duplicados obvios ('Inmobiliarios'/'Inmobiliario',
-    'Otros'/'Otro'). El resto se deja tal cual viene del Excel.
+    'Otros'/'Otro') y las dos variantes que el catálogo unificó
+    ('Infraestructura' -> 'Infraestructura / Obras públicas',
+    'Energía / Infraestructura' -> 'Energía'). Ver SECTOR_ALIAS.
   - "Es crítico (Si/No)" viene 100% vacío en el Excel origen -> todos los
     permisos quedan con critico=false. Hay que revisarlos a mano en la app
     una vez migrados.
   - organismo -> ministerio: mapa fijo abajo, construido cruzando las hojas
     "Parámetros" y "Listado Organismos >>" del Excel, más 'MTT' que no
-    aparece en ninguna de las dos pero sí en los datos de Permisos.
+    aparece en ninguna de las dos pero sí en los datos de Permisos. Ya NO se
+    usa para insertar (ver abajo): queda como chequeo de que el Excel no
+    traiga un organismo que el catálogo no conoce.
+
+CATÁLOGOS (importante):
+  regiones, sectores, etapas_proyecto, estados_permiso, ministerios y
+  organismos vienen PRE-CARGADOS por db/schema.sql, con ids explícitos y
+  estables. Este script NO los inserta: busca cada valor del Excel por nombre
+  y lo resuelve a su id. Si un valor del Excel no matchea ninguna fila del
+  catálogo, el script ABORTA nombrando el valor, en vez de escribir un NULL
+  silencioso que después nadie encuentra.
 """
 
 import argparse
@@ -61,10 +73,21 @@ ORGANISMO_MINISTERIO = {
     "MTT": "Ministerio de Transportes y Telecomunicaciones",
 }
 
+# Variantes del Excel origen -> nombre canónico en el catálogo `sectores`.
+# Las dos primeras son duplicados obvios (singular/plural); las dos últimas
+# son las que unificó la migración a catálogos (db/migrations/002_catalogos.sql),
+# y se repiten acá para que una carga desde cero dé exactamente el mismo
+# resultado que una base ya migrada.
 SECTOR_ALIAS = {
     "Inmobiliarios": "Inmobiliario",
     "Otros": "Otro",
+    "Infraestructura": "Infraestructura / Obras públicas",
+    "Energía / Infraestructura": "Energía",
 }
+
+# Estados de permiso tal como los escribe el Excel origen. Cualquier otra cosa
+# (vacío, texto raro) cae en 'Pendiente', que es el default del schema.
+ESTADOS_VALIDOS = ("Pendiente", "Resuelto", "Descartado")
 
 # columnas 1-indexadas, tal como aparecen en la fila 2 (encabezado real) del Excel
 PROYECTOS_COLS = {
@@ -240,7 +263,7 @@ def read_permisos(wb):
             continue  # sin proyecto/organismo/nombre no hay permiso valido
 
         estado = clean_text(row_get(row, PERMISOS_COLS, "estado")) or "Pendiente"
-        if estado not in ("Pendiente", "Resuelto", "Descartado"):
+        if estado not in ESTADOS_VALIDOS:
             estado = "Pendiente"
 
         permisos.append({
@@ -266,6 +289,86 @@ def read_permisos(wb):
             "n_catastro": clean_text(row_get(row, PERMISOS_COLS, "n_catastro")),
         })
     return permisos
+
+
+# ----------------------------------------------------------------------------
+# Resolución de catálogos
+#
+# Los catálogos ya están en la base (los carga schema.sql). Acá solo se los
+# lee y se resuelve nombre -> id. Nada de INSERT: si el Excel trae un valor
+# que el catálogo no tiene, es un dato a revisar, no una fila a crear.
+# ----------------------------------------------------------------------------
+
+class CatalogoError(Exception):
+    """Un valor del Excel no matchea ninguna fila del catálogo."""
+
+
+def cargar_catalogo(cur, tabla):
+    """Devuelve {nombre: id} de una tabla de catálogo."""
+    cur.execute(f"SELECT nombre, id FROM {tabla}")
+    filas = cur.fetchall()
+    if not filas:
+        raise CatalogoError(
+            f"El catálogo '{tabla}' está vacío. ¿Se aplicó db/schema.sql completo? "
+            f"Los catálogos se cargan con el schema, no con este script."
+        )
+    return {nombre: id_ for nombre, id_ in filas}
+
+
+def resolver(catalogo, valor, etiqueta, faltantes):
+    """
+    nombre -> id. None pasa como None (columna opcional sin dato en el Excel).
+    Un valor que no está en el catálogo se acumula en `faltantes` para poder
+    reportarlos TODOS juntos y no morir en el primero.
+    """
+    if valor is None:
+        return None
+    if valor not in catalogo:
+        faltantes.add((etiqueta, valor))
+        return None
+    return catalogo[valor]
+
+
+def resolver_catalogos(cur, proyectos, permisos, organismos_en_permisos):
+    """
+    Resuelve, para cada fila leída del Excel, los ids de catálogo que
+    necesitan los INSERT. Aborta con un mensaje que nombra cada valor no
+    encontrado, en vez de dejar NULLs silenciosos.
+
+    Muta `proyectos` y `permisos` agregándoles las claves *_id.
+    """
+    regiones = cargar_catalogo(cur, "regiones")
+    sectores = cargar_catalogo(cur, "sectores")
+    etapas = cargar_catalogo(cur, "etapas_proyecto")
+    estados = cargar_catalogo(cur, "estados_permiso")
+    organismos = cargar_catalogo(cur, "organismos")
+
+    faltantes = set()
+
+    for p in proyectos:
+        p["region_id"] = resolver(regiones, p["region"], "región", faltantes)
+        p["sector_id"] = resolver(sectores, p["sector"], "sector", faltantes)
+        p["etapa_id"] = resolver(etapas, p["etapa"], "etapa", faltantes)
+
+    for p in permisos:
+        p["estado_id"] = resolver(estados, p["estado"], "estado de permiso", faltantes)
+
+    organismo_ids = {}
+    for sigla in organismos_en_permisos:
+        organismo_ids[sigla] = resolver(organismos, sigla, "organismo", faltantes)
+
+    if faltantes:
+        detalle = "\n".join(
+            f"    - {etiqueta}: {valor!r}" for etiqueta, valor in sorted(faltantes)
+        )
+        raise CatalogoError(
+            "Hay valores en el Excel que no existen en los catálogos de la base:\n"
+            f"{detalle}\n"
+            "  Corregí el Excel, o agregá el valor al catálogo en db/schema.sql\n"
+            "  (y a la migración correspondiente). No se escribió nada."
+        )
+
+    return organismo_ids
 
 
 # ----------------------------------------------------------------------------
@@ -323,7 +426,7 @@ def main():
     print(f"  permisos: {len(permisos)}")
     print(f"  organismos distintos en permisos: {len(organismos_en_permisos)}")
     if organismos_sin_ministerio:
-        print(f"  ADVERTENCIA: organismos sin ministerio mapeado (se van a omitir sus permisos): {organismos_sin_ministerio}")
+        print(f"  ADVERTENCIA: organismos que el mapa fijo no conoce: {organismos_sin_ministerio}")
 
     proyectos_ids_excel = {p["id_excel"] for p in proyectos}
     permisos_sin_proyecto = [p for p in permisos if p["proyecto_id_excel"] not in proyectos_ids_excel]
@@ -331,6 +434,20 @@ def main():
         print(f"  ADVERTENCIA: {len(permisos_sin_proyecto)} permisos referencian un proyecto que no existe, se omiten")
 
     if args.dry_run:
+        # Sin tocar la base no se pueden resolver los catálogos, así que se
+        # listan los valores distintos que trae el Excel para poder cotejarlos
+        # a ojo contra db/schema.sql antes de la carga real.
+        print()
+        print("Valores de vocabulario controlado que trae el Excel:")
+        for etiqueta, clave, filas in (
+            ("regiones", "region", proyectos),
+            ("sectores (ya con alias aplicados)", "sector", proyectos),
+            ("etapas", "etapa", proyectos),
+            ("estados de permiso", "estado", permisos),
+        ):
+            valores = sorted({f[clave] for f in filas if f[clave] is not None})
+            print(f"  {etiqueta} ({len(valores)}): {valores}")
+        print()
         print("Dry-run: no se escribió nada en la base de datos.")
         return
 
@@ -339,28 +456,10 @@ def main():
     cur = conn.cursor()
 
     try:
-        # -- ministerios --
-        ministerio_ids = {}
-        for nombre in sorted(set(ORGANISMO_MINISTERIO.values())):
-            cur.execute(
-                "INSERT INTO ministerios (nombre) VALUES (%s) "
-                "ON CONFLICT (nombre) DO UPDATE SET nombre = EXCLUDED.nombre RETURNING id",
-                (nombre,),
-            )
-            ministerio_ids[nombre] = cur.fetchone()[0]
-
-        # -- organismos --
-        organismo_ids = {}
-        for sigla in organismos_en_permisos:
-            ministerio_nombre = ORGANISMO_MINISTERIO.get(sigla)
-            if ministerio_nombre is None:
-                continue
-            cur.execute(
-                "INSERT INTO organismos (id_excel, nombre, ministerio_id) VALUES (%s, %s, %s) "
-                "ON CONFLICT (nombre) DO UPDATE SET ministerio_id = EXCLUDED.ministerio_id RETURNING id",
-                (sigla, sigla, ministerio_ids[ministerio_nombre]),
-            )
-            organismo_ids[sigla] = cur.fetchone()[0]
+        # -- catálogos: se LEEN, no se insertan (vienen de db/schema.sql) --
+        # Se resuelve todo antes del primer INSERT: si falta algún valor, el
+        # script aborta acá y la transacción no llegó a escribir nada.
+        organismo_ids = resolver_catalogos(cur, proyectos, permisos, organismos_en_permisos)
 
         # -- empresas --
         empresa_ids = {}
@@ -388,9 +487,9 @@ def main():
             cur.execute(
                 """
                 INSERT INTO proyectos (
-                    id_excel, nombre, titular, empresa_id, region, sector,
+                    id_excel, nombre, titular, empresa_id, region_id, sector_id,
                     inversion_mmusd, empleo_construccion, empleo_operacion,
-                    estado_ambiental, etapa, fecha_inicio_construccion,
+                    estado_ambiental, etapa_id, fecha_inicio_construccion,
                     fecha_inicio_operacion, habilitantes_aprobado, fecha_ingreso,
                     fecha_ultima_resolucion, observaciones_oasi
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -398,8 +497,8 @@ def main():
                 """,
                 (
                     p["id_excel"], p["nombre"], p["titular"], empresa_ids[p["empresa_id_excel"]],
-                    p["region"], p["sector"], p["inversion_mmusd"], p["empleo_construccion"],
-                    p["empleo_operacion"], p["estado_ambiental"], p["etapa"],
+                    p["region_id"], p["sector_id"], p["inversion_mmusd"], p["empleo_construccion"],
+                    p["empleo_operacion"], p["estado_ambiental"], p["etapa_id"],
                     p["fecha_inicio_construccion"], p["fecha_inicio_operacion"],
                     p["habilitantes_aprobado"], p["fecha_ingreso"], p["fecha_ultima_resolucion"],
                     p["observaciones_oasi"],
@@ -421,7 +520,7 @@ def main():
                 INSERT INTO permisos (
                     id_excel, proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
                     n_expediente, critico, que_habilita, habilitante_construccion,
-                    estado, fecha_ingreso, fecha_resolucion_estimada, fecha_resolucion,
+                    estado_id, fecha_ingreso, fecha_resolucion_estimada, fecha_resolucion,
                     tipo_resolucion, hito_tramitacion, incluido_catastro_hacienda,
                     n_catastro, observaciones
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
@@ -430,7 +529,7 @@ def main():
                 (
                     p["id_excel"], proyecto_id, organismo_id, p["nombre"], p["nombre_estandar"], p["tipo_permiso"],
                     p["n_expediente"], p["critico"], p["que_habilita"], p["habilitante_construccion"],
-                    p["estado"], p["fecha_ingreso"], p["fecha_resolucion_estimada"], p["fecha_resolucion"],
+                    p["estado_id"], p["fecha_ingreso"], p["fecha_resolucion_estimada"], p["fecha_resolucion"],
                     p["tipo_resolucion"], p["hito_tramitacion"], p["incluido_catastro_hacienda"],
                     p["n_catastro"], p["observaciones"],
                 ),
@@ -449,14 +548,18 @@ def main():
         conn.commit()
         print()
         print("Carga completa:")
-        print(f"  ministerios: {len(ministerio_ids)}")
-        print(f"  organismos: {len(organismo_ids)}")
+        print(f"  organismos referenciados (del catálogo): {len(organismo_ids)}")
         print(f"  empresas: {len(empresa_ids)}")
         print(f"  comites: {len(comite_ids)}")
         print(f"  proyectos: {len(proyecto_ids)}")
         print(f"  permisos: {permisos_cargados}")
         print(f"  permisos_comite: {permisos_comite_cargados}")
 
+    except CatalogoError as err:
+        # Error de datos, no un bug: se reporta legible y sin traceback.
+        conn.rollback()
+        print(f"\nERROR: {err}", file=sys.stderr)
+        sys.exit(1)
     except Exception:
         conn.rollback()
         raise

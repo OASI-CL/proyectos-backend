@@ -1,6 +1,105 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
 import { registrarCambios } from '../services/historial'
+import type {
+  EstadoPermiso,
+  EstadoPermisoCodigo,
+  EstadoValidacion,
+  Semaforo,
+} from '../shared/types'
+
+/**
+ * ============================================================================
+ * PERMISO — todas las columnas que tiene la entidad.
+ *
+ * Verificado contra `\d permisos` y `\d v_permisos`.
+ *
+ * Todo lo que lee la API sale de la VISTA `v_permisos`: resuelve el catálogo
+ * de estados, trae el proyecto / organismo / empresa detrás del permiso, y
+ * calcula los días de tramitación y el semáforo contra CURRENT_DATE. Las
+ * escrituras van a la tabla base `permisos` y usan `estado_id`.
+ * ============================================================================
+ */
+
+/** Columnas propias de la tabla base `permisos`. */
+export interface Permiso {
+  id: number
+  /** 'PM1377', etc. Solo display, nunca FK. */
+  id_excel: string | null
+  proyecto_id: number
+  organismo_id: number
+  /** 'Nombre Permiso' del Excel origen. */
+  nombre: string
+  /** 'Nombre Permiso Estándar': la nomenclatura normalizada del permiso. */
+  nombre_estandar: string | null
+  /** Texto libre, MUY heterogéneo en el Excel origen. */
+  tipo_permiso: string | null
+  n_expediente: string | null
+  /**
+   * 'Es crítico (Si/No)'. Viene VACÍO en todo el Excel origen, así que hoy
+   * está en false en todas las filas migradas: hay que revisarlo a mano.
+   */
+  critico: boolean
+  /** Construcción / operación / acceso al terreno / otro. */
+  que_habilita: string | null
+  /** Dato sucio en origen (Si/si/SI/2/textos largos); se normalizó a booleano. */
+  habilitante_construccion: boolean
+  /** FK a `estados_permiso`. NOT NULL, default 1 = Pendiente. */
+  estado_id: number
+  fecha_ingreso: string | null
+  fecha_resolucion_estimada: string | null
+  fecha_resolucion: string | null
+  /** 'Favorable' | 'No favorable' | texto libre (dato sucio en origen). */
+  tipo_resolucion: string | null
+  hito_tramitacion: string | null
+  incluido_catastro_hacienda: boolean | null
+  n_catastro: string | null
+  observaciones: string | null
+  estado_validacion: EstadoValidacion
+  // --- Auditoría ---
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Columnas que AGREGA la vista `v_permisos`. Ninguna existe como columna. */
+export interface VPermiso extends Permiso {
+  // --- Catálogo de estados resuelto ---
+  /** Nombre visible del estado. Los filtros por nombre siguen andando. */
+  estado: EstadoPermiso
+  /** Clave estable del estado. Preferirla al nombre en código nuevo. */
+  estado_codigo: EstadoPermisoCodigo
+  /** true en Resuelto/Descartado: la tramitación terminó, de una u otra forma. */
+  estado_es_final: boolean
+  // --- Contexto: proyecto, organismo, ministerio, empresa ---
+  proyecto_nombre: string
+  proyecto_id_excel: string | null
+  organismo_nombre: string
+  ministerio_id: number
+  ministerio_nombre: string
+  empresa_id: number
+  empresa_nombre: string
+  // --- Del proyecto: la pantalla de Permisos filtra por estos campos ---
+  region_id: number | null
+  region: string | null
+  sector_id: number | null
+  sector: string | null
+  etapa_id: number | null
+  etapa: string | null
+  inversion_mmusd: number | null
+  // --- Derivados contra CURRENT_DATE ---
+  /**
+   * Días desde fecha_ingreso hasta fecha_resolucion (si ya se resolvió) o
+   * hasta hoy (si sigue pendiente). NULL si no hay fecha_ingreso.
+   */
+  dias_tramitacion: number | null
+  menos_3_meses: boolean | null
+  entre_3_y_6_meses: boolean | null
+  supera_6_meses: boolean | null
+  /** finalizado | critico (>180d) | en_alerta (>=90d) | en_plazo. */
+  semaforo: Semaforo
+}
 
 /** Traduce los query params de filtro a condiciones SQL sobre v_permisos. */
 export function filtrosPermisos(wb: WhereBuilder, q: Record<string, unknown>) {
@@ -11,9 +110,14 @@ export function filtrosPermisos(wb: WhereBuilder, q: Record<string, unknown>) {
   if (n('ministerio_id') !== undefined) wb.add((i) => `ministerio_id = $${i}`, n('ministerio_id'))
   if (n('empresa_id') !== undefined) wb.add((i) => `empresa_id = $${i}`, n('empresa_id'))
   if (n('proyecto_id') !== undefined) wb.add((i) => `proyecto_id = $${i}`, n('proyecto_id'))
+  // Estado/región/sector aceptan el nombre (lo que manda la barra de filtros,
+  // la vista lo sigue exponiendo) o el id del catálogo.
   if (s('estado')) wb.add((i) => `estado = $${i}`, s('estado'))
+  if (n('estado_id') !== undefined) wb.add((i) => `estado_id = $${i}`, n('estado_id'))
   if (s('region')) wb.add((i) => `region = $${i}`, s('region'))
+  if (n('region_id') !== undefined) wb.add((i) => `region_id = $${i}`, n('region_id'))
   if (s('sector')) wb.add((i) => `sector = $${i}`, s('sector'))
+  if (n('sector_id') !== undefined) wb.add((i) => `sector_id = $${i}`, n('sector_id'))
   if (s('id_excel')) wb.add((i) => `id_excel = $${i}`, s('id_excel'))
 
   if (s('critico') === 'true') wb.addRaw('critico IS TRUE')

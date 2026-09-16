@@ -15,6 +15,12 @@ export interface UsuarioAutenticado {
   /** Scope. Only the one matching the role is set. */
   empresaId: number | null
   organismoId: number | null
+  /**
+   * Scope of the 'region' role, as the catalog id. Every row filter uses this
+   * (indexed integer comparison, immune to accent/spelling drift).
+   */
+  regionId: number | null
+  /** Same region, resolved to its name. Display only — never filter on it. */
   region: string | null
 }
 
@@ -71,13 +77,26 @@ function rolDesdeGrupos(grupos: string[]): RolUsuario | null {
 /**
  * Fake user for development. The role and scope come from headers so the
  * frontend can offer a role switcher and exercise every view.
+ *
+ * `x-dev-region` now carries the REGION ID (a number), not the name — the
+ * header name is kept so nothing else (CORS allowlist, the frontend
+ * interceptor) had to be renamed. The readable name is looked up from the
+ * catalog so /me still has something to display.
  */
-function usuarioDev(req: Request): UsuarioAutenticado {
+async function usuarioDev(req: Request): Promise<UsuarioAutenticado> {
   const rolHeader = req.header('x-dev-rol') as RolUsuario | undefined
   const rol = rolHeader && ROLES.includes(rolHeader) ? rolHeader : 'admin'
   const empresaId = req.header('x-dev-empresa-id')
   const organismoId = req.header('x-dev-organismo-id')
-  const region = req.header('x-dev-region')
+  const regionHeader = req.header('x-dev-region')
+  const regionId =
+    regionHeader && !Number.isNaN(Number(regionHeader)) ? Number(regionHeader) : null
+
+  let region: string | null = null
+  if (regionId !== null) {
+    const { rows } = await pool.query('SELECT nombre FROM regiones WHERE id = $1', [regionId])
+    region = rows[0]?.nombre ?? null
+  }
 
   return {
     sub: `dev-sub-${rol}`,
@@ -86,7 +105,8 @@ function usuarioDev(req: Request): UsuarioAutenticado {
     rol,
     empresaId: empresaId ? Number(empresaId) : null,
     organismoId: organismoId ? Number(organismoId) : null,
-    region: region ? decodeURIComponent(region) : null,
+    regionId,
+    region,
   }
 }
 
@@ -95,7 +115,7 @@ function usuarioDev(req: Request): UsuarioAutenticado {
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (AUTH_MODE === 'dev') {
-    req.user = usuarioDev(req)
+    req.user = await usuarioDev(req)
     return next()
   }
 
@@ -104,16 +124,27 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     return res.status(401).json({ error: 'no_autenticado', message: 'Falta el token' })
   }
 
+  // Only a failure to verify the token is a 401. Everything after it (the
+  // database read, above all) must surface as itself: answering 401 to a
+  // broken query tells the user their session expired and sends them to
+  // re-login forever while the real error stays invisible.
+  let payload: Awaited<ReturnType<ReturnType<typeof getVerifier>['verify']>>
   try {
-    const payload = await getVerifier().verify(header.slice('Bearer '.length))
+    payload = await getVerifier().verify(header.slice('Bearer '.length))
+  } catch {
+    return res.status(401).json({ error: 'token_invalido', message: 'Token inválido o expirado' })
+  }
+
+  try {
     const grupos = (payload['cognito:groups'] as string[] | undefined) ?? []
     const rolCognito = rolDesdeGrupos(grupos)
 
     // The usuarios table complements the JWT with the scope (which company,
-    // agency or region the person belongs to).
+    // agency or region the person belongs to). Read through v_usuarios so the
+    // region comes back both as its id (what the filters use) and as its name.
     const { rows } = await pool.query(
-      `SELECT nombre, email, rol, empresa_id, organismo_id, region
-         FROM usuarios WHERE cognito_sub = $1`,
+      `SELECT nombre, email, rol, empresa_id, organismo_id, region_id, region
+         FROM v_usuarios WHERE cognito_sub = $1`,
       [payload.sub],
     )
 
@@ -132,7 +163,7 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const scopeFaltante =
       (rol === 'empresa' && fila?.empresa_id == null) ||
       (rol === 'organismo' && fila?.organismo_id == null) ||
-      (rol === 'region' && fila?.region == null)
+      (rol === 'region' && fila?.region_id == null)
 
     if (scopeFaltante) {
       return res.status(403).json({
@@ -148,11 +179,13 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
       rol,
       empresaId: fila?.empresa_id ?? null,
       organismoId: fila?.organismo_id ?? null,
+      regionId: fila?.region_id ?? null,
       region: fila?.region ?? null,
     }
     return next()
-  } catch {
-    return res.status(401).json({ error: 'token_invalido', message: 'Token inválido o expirado' })
+  } catch (err) {
+    // Not an auth problem: let the error handler report it as what it is.
+    return next(err)
   }
 }
 
