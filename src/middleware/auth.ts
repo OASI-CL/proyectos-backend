@@ -4,7 +4,7 @@ import { pool } from '../db/client'
 import type { RolUsuario } from '../shared/types'
 
 // ----------------------------------------------------------------------------
-// Usuario autenticado que queda en req.user
+// The authenticated user, left on req.user
 // ----------------------------------------------------------------------------
 
 export interface UsuarioAutenticado {
@@ -12,8 +12,10 @@ export interface UsuarioAutenticado {
   nombre: string
   email: string
   rol: RolUsuario
+  /** Scope. Only the one matching the role is set. */
   empresaId: number | null
   organismoId: number | null
+  region: string | null
 }
 
 declare global {
@@ -25,13 +27,13 @@ declare global {
 }
 
 // ----------------------------------------------------------------------------
-// Modo de autenticación
+// Auth mode
 //
-//   AUTH_MODE=dev      -> no valida nada, arma un usuario falso desde headers.
-//                          Sirve para desarrollar sin tener Cognito montado.
-//   AUTH_MODE=cognito  -> valida el JWT contra el JWKS del User Pool.
+//   AUTH_MODE=dev      -> validates nothing, builds a fake user from headers.
+//                         Lets us develop without a Cognito pool.
+//   AUTH_MODE=cognito  -> verifies the JWT against the User Pool's JWKS.
 //
-// En producción SIEMPRE debe ir en 'cognito'.
+// Production must always run 'cognito' (see infra/ and DEPLOYMENT.md).
 // ----------------------------------------------------------------------------
 
 const AUTH_MODE = process.env.AUTH_MODE ?? 'dev'
@@ -49,39 +51,47 @@ function getVerifier() {
   return verifierCache
 }
 
+const ROLES: RolUsuario[] = ['admin', 'oasi', 'organismo', 'empresa', 'region']
+
 /**
- * Traduce los grupos de Cognito al rol de la app. Si alguien está en varios
- * grupos gana el de mayor privilegio.
+ * Maps Cognito groups to the app role. If someone is in several groups the
+ * most privileged one wins.
+ *
+ * The Cognito group is only a fallback: the `usuarios` row is authoritative,
+ * because that is where the scope (which company / agency / region) lives and
+ * a role without its scope cannot be enforced.
  */
 function rolDesdeGrupos(grupos: string[]): RolUsuario | null {
-  if (grupos.includes('admin')) return 'admin'
-  if (grupos.includes('oasi')) return 'oasi'
-  if (grupos.includes('organismo_lector')) return 'organismo_lector'
-  if (grupos.includes('empresa')) return 'empresa'
+  for (const rol of ROLES) {
+    if (grupos.includes(rol)) return rol
+  }
   return null
 }
 
 /**
- * Usuario falso para desarrollo. El rol y el scope se controlan por headers,
- * así el frontend puede tener un selector de rol para probar cada vista.
+ * Fake user for development. The role and scope come from headers so the
+ * frontend can offer a role switcher and exercise every view.
  */
 function usuarioDev(req: Request): UsuarioAutenticado {
-  const rol = (req.header('x-dev-rol') as RolUsuario | undefined) ?? 'admin'
+  const rolHeader = req.header('x-dev-rol') as RolUsuario | undefined
+  const rol = rolHeader && ROLES.includes(rolHeader) ? rolHeader : 'admin'
   const empresaId = req.header('x-dev-empresa-id')
   const organismoId = req.header('x-dev-organismo-id')
+  const region = req.header('x-dev-region')
 
   return {
-    sub: 'dev-sub-local',
+    sub: `dev-sub-${rol}`,
     nombre: 'Usuario de desarrollo',
     email: 'dev@oasi.local',
     rol,
     empresaId: empresaId ? Number(empresaId) : null,
     organismoId: organismoId ? Number(organismoId) : null,
+    region: region ? decodeURIComponent(region) : null,
   }
 }
 
 /**
- * Middleware de autenticación. Deja el usuario en req.user o responde 401.
+ * Authentication middleware. Leaves the user on req.user or answers 401.
  */
 export async function requireAuth(req: Request, res: Response, next: NextFunction) {
   if (AUTH_MODE === 'dev') {
@@ -99,36 +109,55 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     const grupos = (payload['cognito:groups'] as string[] | undefined) ?? []
     const rolCognito = rolDesdeGrupos(grupos)
 
-    // La tabla usuarios complementa el JWT con el scope (a qué empresa u
-    // organismo pertenece la persona).
+    // The usuarios table complements the JWT with the scope (which company,
+    // agency or region the person belongs to).
     const { rows } = await pool.query(
-      `SELECT nombre, email, rol, empresa_id, organismo_id
+      `SELECT nombre, email, rol, empresa_id, organismo_id, region
          FROM usuarios WHERE cognito_sub = $1`,
       [payload.sub],
     )
 
-    if (rows.length === 0 && rolCognito === null) {
-      return res.status(403).json({ error: 'sin_rol', message: 'El usuario no tiene rol asignado' })
+    const fila = rows[0]
+    const rol = (fila?.rol as RolUsuario | undefined) ?? rolCognito
+
+    if (!rol) {
+      return res.status(403).json({
+        error: 'sin_rol',
+        message: 'El usuario no tiene rol asignado. Pedile a un administrador que te dé de alta.',
+      })
     }
 
-    const fila = rows[0]
+    // A scoped role without its scope would otherwise fall through to "see
+    // everything" — refuse instead of leaking.
+    const scopeFaltante =
+      (rol === 'empresa' && fila?.empresa_id == null) ||
+      (rol === 'organismo' && fila?.organismo_id == null) ||
+      (rol === 'region' && fila?.region == null)
+
+    if (scopeFaltante) {
+      return res.status(403).json({
+        error: 'sin_alcance',
+        message: `El rol ${rol} necesita tener asignado su alcance. Contactá a un administrador.`,
+      })
+    }
+
     req.user = {
       sub: String(payload.sub),
       nombre: fila?.nombre ?? String(payload.name ?? payload.email ?? payload.sub),
       email: fila?.email ?? String(payload.email ?? ''),
-      // El rol de la tabla manda sobre el grupo de Cognito si están los dos.
-      rol: (fila?.rol as RolUsuario) ?? rolCognito!,
+      rol,
       empresaId: fila?.empresa_id ?? null,
       organismoId: fila?.organismo_id ?? null,
+      region: fila?.region ?? null,
     }
     return next()
-  } catch (err) {
+  } catch {
     return res.status(401).json({ error: 'token_invalido', message: 'Token inválido o expirado' })
   }
 }
 
 /**
- * Restringe una ruta a ciertos roles. Ej: requireRol('admin')
+ * Restricts a route to certain roles. e.g. requireRol('admin')
  */
 export function requireRol(...roles: RolUsuario[]) {
   return (req: Request, res: Response, next: NextFunction) => {

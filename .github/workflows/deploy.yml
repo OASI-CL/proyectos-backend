@@ -1,0 +1,85 @@
+name: Deploy backend
+
+# CI runs on every push and PR (type-check only, no AWS credentials needed).
+# The deploy job only runs on main, and only if CI passed.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: Stage to deploy
+        required: true
+        default: dev
+        type: choice
+        options: [dev, prod]
+
+env:
+  NODE_VERSION: '22'
+  AWS_REGION: us-east-1
+
+jobs:
+  ci:
+    name: Type-check and build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - run: npm ci
+      - name: Type-check
+        run: npm run build
+
+      - name: Type-check infra
+        working-directory: infra
+        run: |
+          npm ci
+          npm run build
+
+  deploy:
+    name: Deploy to AWS
+    # Never deploy from a pull request: it would run code from the PR branch
+    # with the deploy credentials.
+    if: github.event_name != 'pull_request'
+    needs: ci
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.stage || 'dev' }}
+    permissions:
+      id-token: write # for OIDC — no long-lived AWS keys in GitHub
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      # OIDC instead of stored access keys: GitHub gets a short-lived token
+      # from AWS for this repo only. See DEPLOYMENT.md for how the role is set
+      # up the first time.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - run: npm ci
+
+      - name: Build Lambda bundle
+        run: npm run build:lambda
+
+      - name: Deploy CDK stack
+        working-directory: infra
+        run: |
+          npm ci
+          npx cdk deploy --all \
+            --require-approval never \
+            -c stage=${{ inputs.stage || 'dev' }} \
+            -c frontendOrigin=${{ vars.FRONTEND_ORIGIN }}

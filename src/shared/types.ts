@@ -10,7 +10,15 @@
 
 // --- Enums / literales -----------------------------------------------------
 
-export type RolUsuario = 'admin' | 'oasi' | 'organismo_lector' | 'empresa'
+/**
+ * admin      — manages users and their scope
+ * oasi       — sees everything, approves what the other roles submit
+ * organismo  — sees the permits of its own agency and the projects behind
+ *              them; can propose permit edits (OASI approves them)
+ * empresa    — sees only its own projects/permits, can propose new ones
+ * region     — sees every project of its region, across all agencies (read-only)
+ */
+export type RolUsuario = 'admin' | 'oasi' | 'organismo' | 'empresa' | 'region'
 
 export type EstadoPermiso = 'Pendiente' | 'Resuelto' | 'Descartado'
 
@@ -129,6 +137,41 @@ export interface Usuario extends Auditoria {
   rol: RolUsuario
   empresa_id: number | null
   organismo_id: number | null
+  /** Scope of the 'region' role (regions are free text on proyectos). */
+  region: string | null
+}
+
+// --- Approval workflow --------------------------------------------------------
+
+export type EntidadSolicitud = 'proyecto' | 'permiso'
+export type TipoSolicitud = 'creacion' | 'edicion'
+export type EstadoSolicitud = 'pendiente' | 'aprobada' | 'rechazada'
+
+export interface SolicitudCambio {
+  id: number
+  entidad: EntidadSolicitud
+  entidad_id: number
+  tipo: TipoSolicitud
+  cambios: Record<string, unknown>
+  estado: EstadoSolicitud
+  comentario: string | null
+  solicitado_por: string
+  solicitado_at: string
+  revisado_por: string | null
+  revisado_at: string | null
+  comentario_revision: string | null
+}
+
+/** v_solicitudes_cambio: the request plus the context the reviewer needs. */
+export interface VSolicitudCambio extends SolicitudCambio {
+  solicitado_por_nombre: string | null
+  revisado_por_nombre: string | null
+  entidad_nombre: string | null
+  entidad_id_excel: string | null
+  empresa_id: number | null
+  empresa_nombre: string | null
+  organismo_nombre: string | null
+  region: string | null
 }
 
 // --- Historial y adjuntos --------------------------------------------------------

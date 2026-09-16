@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-lambda/
 .env
 *.log
 .DS_Store
@@ -11,3 +12,8 @@ data/
 .venv/
 __pycache__/
 
+# CDK
+infra/node_modules/
+infra/cdk.out/
+infra/*.js
+infra/*.d.ts

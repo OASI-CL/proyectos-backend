@@ -1,7 +1,12 @@
 import { Router } from 'express'
 import { pool } from '../db/client'
-import { WhereBuilder, scopePermisos, puedeEscribir } from '../middleware/scope'
+import { WhereBuilder, scopePermisos, puedeEscribir, requiereAprobacion } from '../middleware/scope'
 import { registrarCambios } from '../services/historial'
+import {
+  ApprovalError,
+  crearSolicitudEdicion,
+  filtrarCamposEditables,
+} from '../services/approvals'
 
 const router = Router()
 
@@ -173,16 +178,12 @@ router.get('/:id/historial', async (req, res, next) => {
   }
 })
 
-const CAMPOS_EDITABLES = [
-  'nombre', 'nombre_estandar', 'tipo_permiso', 'n_expediente', 'critico',
-  'que_habilita', 'habilitante_construccion', 'estado', 'fecha_ingreso',
-  'fecha_resolucion_estimada', 'fecha_resolucion', 'tipo_resolucion',
-  'hito_tramitacion', 'incluido_catastro_hacienda', 'n_catastro', 'observaciones',
-]
-
 /**
- * PATCH /permisos/:id — edita y registra el diff en historial, todo en una
- * sola transacción.
+ * PATCH /permisos/:id
+ *
+ * OASI/admin write straight to the table. empresa and organismo do not: their
+ * edit is queued as a change request for OASI to approve (see
+ * services/approvals.ts) and this responds 202 with the request.
  */
 router.patch('/:id', async (req, res, next) => {
   const user = req.user!
@@ -191,6 +192,48 @@ router.patch('/:id', async (req, res, next) => {
   }
 
   const id = Number(req.params.id)
+
+  // --- Roles that need approval: queue instead of writing -------------------
+  if (requiereAprobacion(user)) {
+    try {
+      // Scope check first: you can only propose changes on what you can see.
+      const wbScope = new WhereBuilder()
+      scopePermisos(wbScope, user)
+      wbScope.add((i) => `id = $${i}`, id)
+      const visible = await pool.query(`SELECT id FROM v_permisos ${wbScope.where}`, wbScope.params)
+      if (visible.rows.length === 0) {
+        return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
+      }
+
+      const cambiosPropuestos = filtrarCamposEditables('permiso', req.body ?? {})
+      if (Object.keys(cambiosPropuestos).length === 0) {
+        return res
+          .status(400)
+          .json({ error: 'sin_cambios', message: 'No se envió ningún campo editable' })
+      }
+
+      const solicitud = await crearSolicitudEdicion(
+        'permiso',
+        id,
+        cambiosPropuestos,
+        user,
+        typeof req.body?.comentario === 'string' ? req.body.comentario : undefined,
+      )
+
+      return res.status(202).json({
+        estado: 'pendiente_aprobacion',
+        message: 'Tus cambios quedaron enviados para revisión de OASI.',
+        solicitud,
+      })
+    } catch (err) {
+      if (err instanceof ApprovalError) {
+        return res.status(err.status).json({ error: err.code, message: err.message })
+      }
+      return next(err)
+    }
+  }
+
+  // --- OASI / admin: direct write -------------------------------------------
   const client = await pool.connect()
 
   try {
@@ -212,12 +255,7 @@ router.patch('/:id', async (req, res, next) => {
     }
 
     const anterior = previo.rows[0]
-    const cambios: Record<string, unknown> = {}
-    for (const campo of CAMPOS_EDITABLES) {
-      if (Object.prototype.hasOwnProperty.call(req.body, campo)) {
-        cambios[campo] = req.body[campo] === '' ? null : req.body[campo]
-      }
-    }
+    const cambios = filtrarCamposEditables('permiso', req.body ?? {})
 
     if (Object.keys(cambios).length === 0) {
       await client.query('ROLLBACK')

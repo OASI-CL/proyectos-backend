@@ -1,15 +1,19 @@
 import type { UsuarioAutenticado } from './auth'
 
 /**
- * Scoping por rol. El backend SIEMPRE inyecta el filtro: nunca se confía en
- * que el frontend filtre.
+ * Row-level scoping and the write/approval matrix.
  *
- *   empresa           -> solo los proyectos de su empresa
- *   organismo_lector  -> solo los permisos de su organismo
- *   oasi | admin      -> sin filtro
+ * The backend ALWAYS injects the filter — the frontend is never trusted to
+ * do it. Every query that returns project or permit rows must go through
+ * scopePermisos / scopeProyectos.
  *
- * Los helpers devuelven un fragmento SQL más sus parámetros, pensados para
- * concatenarse a un WHERE que se va armando con un contador de placeholders.
+ * | role      | sees                                         | can write        |
+ * |-----------|----------------------------------------------|------------------|
+ * | admin     | everything                                   | direct           |
+ * | oasi      | everything                                   | direct, approves |
+ * | organismo | permits of its agency + those projects        | needs approval   |
+ * | empresa   | its own projects + their permits              | needs approval   |
+ * | region    | every project of its region, all agencies     | read-only        |
  */
 
 export interface Condicion {
@@ -18,8 +22,8 @@ export interface Condicion {
 }
 
 /**
- * Pequeño constructor de WHERE. Lleva la cuenta de los $1, $2, ... para que
- * las queries siempre queden parametrizadas.
+ * Small WHERE builder. Keeps track of $1, $2, ... so queries always stay
+ * parameterised.
  */
 export class WhereBuilder {
   private condiciones: string[] = []
@@ -44,7 +48,7 @@ export class WhereBuilder {
     return this.valores
   }
 
-  /** Siguiente número de placeholder disponible (para LIMIT/OFFSET). */
+  /** Next available placeholder number (for LIMIT/OFFSET). */
   push(valor: unknown): number {
     this.valores.push(valor)
     return this.valores.length
@@ -52,41 +56,73 @@ export class WhereBuilder {
 }
 
 /**
- * Aplica el scope del rol sobre una consulta a v_permisos (o v_permisos_comite,
- * que tiene las mismas columnas de scope).
+ * Scopes a query against v_permisos (or v_permisos_comite, same columns).
+ *
+ * A scoped role whose scope is missing gets -1 / '' so it matches nothing —
+ * failing closed is better than leaking the whole table.
  */
 export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado) {
   if (user.rol === 'empresa') {
-    // empresaId null en un rol empresa = no puede ver nada (mejor eso que ver todo)
     wb.add((n) => `empresa_id = $${n}`, user.empresaId ?? -1)
-  } else if (user.rol === 'organismo_lector') {
+  } else if (user.rol === 'organismo') {
     wb.add((n) => `organismo_id = $${n}`, user.organismoId ?? -1)
+  } else if (user.rol === 'region') {
+    wb.add((n) => `region = $${n}`, user.region ?? '')
   }
   return wb
 }
 
 /**
- * Aplica el scope del rol sobre una consulta a v_proyectos.
+ * Scopes a query against v_proyectos.
  *
- * Un organismo_lector ve solo los proyectos que tienen al menos un permiso en
- * su organismo (si no, vería el universo completo de proyectos).
+ * An 'organismo' user only sees projects that have at least one permit in its
+ * agency — otherwise it would see the whole project universe.
  */
 export function scopeProyectos(wb: WhereBuilder, user: UsuarioAutenticado) {
   if (user.rol === 'empresa') {
     wb.add((n) => `empresa_id = $${n}`, user.empresaId ?? -1)
-  } else if (user.rol === 'organismo_lector') {
+  } else if (user.rol === 'organismo') {
     wb.add(
       (n) => `id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = $${n})`,
       user.organismoId ?? -1,
     )
+  } else if (user.rol === 'region') {
+    wb.add((n) => `region = $${n}`, user.region ?? '')
   }
   return wb
 }
 
-/**
- * ¿Este usuario puede crear/editar proyectos y permisos?
- * Los roles de solo lectura (organismo_lector) nunca.
- */
+// ----------------------------------------------------------------------------
+// Write matrix
+// ----------------------------------------------------------------------------
+
+/** Can this user submit changes at all (directly or for approval)? */
 export function puedeEscribir(user: UsuarioAutenticado): boolean {
+  return user.rol !== 'region'
+}
+
+/** Writes straight to the table, no approval step. */
+export function escribeDirecto(user: UsuarioAutenticado): boolean {
+  return user.rol === 'admin' || user.rol === 'oasi'
+}
+
+/**
+ * Whether this user's edits have to be queued as a change request instead of
+ * being applied: empresa and organismo propose, OASI approves.
+ */
+export function requiereAprobacion(user: UsuarioAutenticado): boolean {
+  return user.rol === 'empresa' || user.rol === 'organismo'
+}
+
+/** Can review (approve/reject) other people's change requests. */
+export function puedeAprobar(user: UsuarioAutenticado): boolean {
+  return user.rol === 'admin' || user.rol === 'oasi'
+}
+
+/**
+ * Can create whole projects. An 'organismo' can edit the permits it is
+ * responsible for, but it does not own projects, so it cannot create them.
+ */
+export function puedeCrearProyectos(user: UsuarioAutenticado): boolean {
   return user.rol === 'admin' || user.rol === 'oasi' || user.rol === 'empresa'
 }

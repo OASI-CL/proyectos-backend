@@ -90,10 +90,15 @@ function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) {
   if (user.rol === 'empresa') {
     permitWhere.push(`p.empresa_id = ${sql.add(user.empresaId ?? -1)}`)
     projectWhere.push(`pr.empresa_id = ${sql.add(user.empresaId ?? -1)}`)
-  } else if (user.rol === 'organismo_lector') {
+  } else if (user.rol === 'organismo') {
     const agency = sql.add(user.organismoId ?? -1)
     permitWhere.push(`p.organismo_id = ${agency}`)
     projectWhere.push(`pr.id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = ${agency})`)
+  } else if (user.rol === 'region') {
+    // Sees every project of its region, across all agencies.
+    const region = sql.add(user.region ?? '')
+    permitWhere.push(`p.region = ${region}`)
+    projectWhere.push(`pr.region = ${region}`)
   }
 
   // --- Permit-level filters ---

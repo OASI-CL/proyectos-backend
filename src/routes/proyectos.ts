@@ -1,6 +1,14 @@
 import { Router } from 'express'
 import { pool } from '../db/client'
-import { WhereBuilder, scopeProyectos, scopePermisos, puedeEscribir } from '../middleware/scope'
+import {
+  WhereBuilder,
+  scopeProyectos,
+  scopePermisos,
+  puedeEscribir,
+  puedeCrearProyectos,
+  requiereAprobacion,
+} from '../middleware/scope'
+import { crearSolicitudCreacion } from '../services/approvals'
 
 const router = Router()
 
@@ -110,10 +118,17 @@ router.get('/:id/permisos', async (req, res, next) => {
  */
 router.post('/', async (req, res, next) => {
   const user = req.user!
-  if (!puedeEscribir(user)) {
-    return res.status(403).json({ error: 'sin_permiso', message: 'Tu rol es de solo lectura' })
+  if (!puedeCrearProyectos(user)) {
+    return res.status(403).json({
+      error: 'sin_permiso',
+      message:
+        user.rol === 'organismo'
+          ? 'Un organismo puede editar sus permisos, pero no crear proyectos.'
+          : 'Tu rol es de solo lectura',
+    })
   }
 
+  const client = await pool.connect()
   try {
     const b = req.body ?? {}
     if (!b.nombre) {
@@ -125,9 +140,12 @@ router.post('/', async (req, res, next) => {
       return res.status(400).json({ error: 'datos_invalidos', message: 'Falta la empresa' })
     }
 
-    const estadoValidacion = user.rol === 'empresa' ? 'en_revision' : 'validado'
+    const necesitaAprobacion = requiereAprobacion(user)
+    const estadoValidacion = necesitaAprobacion ? 'en_revision' : 'validado'
 
-    const { rows } = await pool.query(
+    await client.query('BEGIN')
+
+    const { rows } = await client.query(
       `INSERT INTO proyectos (
          nombre, titular, empresa_id, region, sector, inversion_mmusd,
          empleo_construccion, empleo_operacion, etapa, estado_ambiental,
@@ -144,9 +162,22 @@ router.post('/', async (req, res, next) => {
       ],
     )
 
-    res.status(201).json(rows[0])
+    // Queue it for OASI so it shows up in the same approvals screen as edits.
+    if (necesitaAprobacion) {
+      await crearSolicitudCreacion(client, 'proyecto', rows[0].id, user)
+    }
+
+    await client.query('COMMIT')
+
+    res.status(201).json({
+      ...rows[0],
+      pendienteAprobacion: necesitaAprobacion,
+    })
   } catch (err) {
+    await client.query('ROLLBACK')
     next(err)
+  } finally {
+    client.release()
   }
 })
 
@@ -179,27 +210,51 @@ router.post('/:id/permisos', async (req, res, next) => {
       })
     }
 
-    const estadoValidacion = user.rol === 'empresa' ? 'en_revision' : 'validado'
+    // An 'organismo' can only add permits that belong to its own agency.
+    if (user.rol === 'organismo' && Number(b.organismo_id) !== user.organismoId) {
+      return res.status(403).json({
+        error: 'sin_permiso',
+        message: 'Solo podés agregar permisos de tu propio organismo.',
+      })
+    }
 
-    const { rows } = await pool.query(
-      `INSERT INTO permisos (
-         proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
-         n_expediente, critico, que_habilita, habilitante_construccion, estado,
-         fecha_ingreso, fecha_resolucion_estimada, observaciones,
-         estado_validacion, created_by, updated_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
-       RETURNING *`,
-      [
-        proyectoId, b.organismo_id, b.nombre, b.nombre_estandar ?? null,
-        b.tipo_permiso ?? null, b.n_expediente ?? null, b.critico ?? false,
-        b.que_habilita ?? null, b.habilitante_construccion ?? false,
-        b.estado ?? 'Pendiente', b.fecha_ingreso || null,
-        b.fecha_resolucion_estimada || null, b.observaciones ?? null,
-        estadoValidacion, user.sub,
-      ],
-    )
+    const necesitaAprobacion = requiereAprobacion(user)
+    const estadoValidacion = necesitaAprobacion ? 'en_revision' : 'validado'
 
-    res.status(201).json(rows[0])
+    const client = await pool.connect()
+    try {
+      await client.query('BEGIN')
+
+      const { rows } = await client.query(
+        `INSERT INTO permisos (
+           proyecto_id, organismo_id, nombre, nombre_estandar, tipo_permiso,
+           n_expediente, critico, que_habilita, habilitante_construccion, estado,
+           fecha_ingreso, fecha_resolucion_estimada, observaciones,
+           estado_validacion, created_by, updated_by
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$15)
+         RETURNING *`,
+        [
+          proyectoId, b.organismo_id, b.nombre, b.nombre_estandar ?? null,
+          b.tipo_permiso ?? null, b.n_expediente ?? null, b.critico ?? false,
+          b.que_habilita ?? null, b.habilitante_construccion ?? false,
+          b.estado ?? 'Pendiente', b.fecha_ingreso || null,
+          b.fecha_resolucion_estimada || null, b.observaciones ?? null,
+          estadoValidacion, user.sub,
+        ],
+      )
+
+      if (necesitaAprobacion) {
+        await crearSolicitudCreacion(client, 'permiso', rows[0].id, user)
+      }
+
+      await client.query('COMMIT')
+      res.status(201).json({ ...rows[0], pendienteAprobacion: necesitaAprobacion })
+    } catch (err) {
+      await client.query('ROLLBACK')
+      throw err
+    } finally {
+      client.release()
+    }
   } catch (err) {
     next(err)
   }

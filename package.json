@@ -6,7 +6,11 @@
   "scripts": {
     "dev": "tsx watch src/app.local.ts",
     "build": "tsc -p tsconfig.json",
+    "build:lambda": "bash scripts/build-lambda.sh",
     "start": "node dist/handler.js",
+    "migrate": "bash scripts/migrate.sh",
+    "infra:diff": "cd infra && npm run diff",
+    "infra:deploy": "cd infra && npm run deploy",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -23,6 +27,7 @@
   "homepage": "https://github.com/OASI-CL/proyectos-backend#readme",
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1132.0",
+    "@aws-sdk/client-secrets-manager": "^3.1133.0",
     "@aws-sdk/s3-request-presigner": "^3.1132.0",
     "aws-jwt-verify": "^5.2.1",
     "cors": "^2.8.6",

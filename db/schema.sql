@@ -179,21 +179,33 @@ CREATE INDEX idx_permisos_comite_comite ON permisos_comite(comite_id);
 -- Usuarios
 -- ----------------------------------------------------------------------------
 
+-- Roles:
+--   admin      gestiona usuarios y su alcance
+--   oasi       ve todo y aprueba lo que mandan los demás roles
+--   organismo  ve los permisos de su organismo y los proyectos detrás de ellos;
+--              puede PROPONER ediciones de permiso, que OASI debe aprobar
+--   empresa    ve solo sus proyectos/permisos, puede proponer altas
+--   region     ve todos los proyectos de su región, de cualquier organismo (solo lectura)
 CREATE TABLE usuarios (
   id            BIGSERIAL PRIMARY KEY,
   cognito_sub   TEXT NOT NULL UNIQUE,
   nombre        TEXT NOT NULL,
   email         TEXT NOT NULL,
-  rol           TEXT NOT NULL CHECK (rol IN ('admin', 'oasi', 'organismo_lector', 'empresa')),
+  rol           TEXT NOT NULL,
   empresa_id    BIGINT REFERENCES empresas(id),
   organismo_id  BIGINT REFERENCES organismos(id),
+  region        TEXT,   -- alcance del rol 'region' (las regiones son texto libre en proyectos)
   created_by  TEXT,
   updated_by  TEXT,
   created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CHECK (
-    (rol = 'empresa' AND empresa_id IS NOT NULL) OR
-    (rol = 'organismo_lector' AND organismo_id IS NOT NULL) OR
+  CONSTRAINT usuarios_rol_check
+    CHECK (rol IN ('admin', 'oasi', 'organismo', 'empresa', 'region')),
+  -- Cada rol acotado tiene que traer el alcance al que está limitado.
+  CONSTRAINT usuarios_scope_check CHECK (
+    (rol = 'empresa'   AND empresa_id   IS NOT NULL) OR
+    (rol = 'organismo' AND organismo_id IS NOT NULL) OR
+    (rol = 'region'    AND region       IS NOT NULL) OR
     (rol IN ('admin', 'oasi'))
   )
 );
@@ -201,6 +213,45 @@ CREATE TABLE usuarios (
 CREATE TRIGGER trg_usuarios_updated_at
   BEFORE UPDATE ON usuarios
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
+
+-- ----------------------------------------------------------------------------
+-- Solicitudes de cambio (flujo de aprobación)
+--
+-- Los roles que necesitan aprobación (empresa, organismo) nunca escriben
+-- directo en proyectos/permisos: sus ediciones quedan acá como propuesta y
+-- OASI las aplica o las rechaza, así las tablas vivas siguen siendo
+-- confiables para los reportes.
+--
+--   tipo = 'creacion' -> la fila ya existe con estado_validacion='en_revision';
+--                        aprobar la pasa a 'validado'.
+--   tipo = 'edicion'  -> `cambios` trae los valores propuestos; aprobar los
+--                        aplica y escribe las filas de historial de siempre.
+-- ----------------------------------------------------------------------------
+
+CREATE TABLE solicitudes_cambio (
+  id                   BIGSERIAL PRIMARY KEY,
+  entidad              TEXT NOT NULL CHECK (entidad IN ('proyecto', 'permiso')),
+  entidad_id           BIGINT NOT NULL,
+  tipo                 TEXT NOT NULL CHECK (tipo IN ('creacion', 'edicion')),
+  cambios              JSONB NOT NULL DEFAULT '{}'::jsonb,
+  estado               TEXT NOT NULL DEFAULT 'pendiente'
+                         CHECK (estado IN ('pendiente', 'aprobada', 'rechazada')),
+  comentario           TEXT,
+  solicitado_por       TEXT NOT NULL,
+  solicitado_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  revisado_por         TEXT,
+  revisado_at          TIMESTAMPTZ,
+  comentario_revision  TEXT
+);
+
+CREATE INDEX idx_solicitudes_estado ON solicitudes_cambio(estado, solicitado_at DESC);
+CREATE INDEX idx_solicitudes_entidad ON solicitudes_cambio(entidad, entidad_id);
+
+-- Una sola solicitud abierta por entidad, así dos personas no encolan
+-- ediciones en conflicto sobre el mismo permiso.
+CREATE UNIQUE INDEX idx_solicitudes_una_pendiente
+  ON solicitudes_cambio(entidad, entidad_id)
+  WHERE estado = 'pendiente';
 
 -- ----------------------------------------------------------------------------
 -- Historial (diff campo a campo, lo escribe el backend en cada UPDATE)
@@ -421,3 +472,36 @@ SELECT
 FROM historial h
 LEFT JOIN usuarios u ON u.cognito_sub = h.usuario_sub
 ORDER BY h.created_at DESC;
+
+-- v_solicitudes_cambio: solicitudes con el nombre de la entidad y de quien la
+-- pidió resueltos, para que la pantalla de aprobaciones no tenga que hacer
+-- tres round trips extra por fila.
+CREATE VIEW v_solicitudes_cambio AS
+SELECT
+  s.*,
+  u.nombre                                   AS solicitado_por_nombre,
+  r.nombre                                   AS revisado_por_nombre,
+  CASE s.entidad
+    WHEN 'proyecto' THEN pr.nombre
+    WHEN 'permiso'  THEN pe.nombre
+  END                                        AS entidad_nombre,
+  CASE s.entidad
+    WHEN 'proyecto' THEN pr.id_excel
+    WHEN 'permiso'  THEN pe.id_excel
+  END                                        AS entidad_id_excel,
+  -- Scope columns: the approvals queue is filtered with these, so a company
+  -- or agency user only sees requests on records they already have access to.
+  COALESCE(pr.empresa_id, pr2.empresa_id)    AS empresa_id,
+  COALESCE(e.nombre, e2.nombre)              AS empresa_nombre,
+  o.id                                       AS organismo_id,
+  o.nombre                                   AS organismo_nombre,
+  COALESCE(pr.region, pr2.region)            AS region
+FROM solicitudes_cambio s
+LEFT JOIN usuarios u   ON u.cognito_sub = s.solicitado_por
+LEFT JOIN usuarios r   ON r.cognito_sub = s.revisado_por
+LEFT JOIN proyectos pr ON s.entidad = 'proyecto' AND pr.id = s.entidad_id
+LEFT JOIN permisos  pe ON s.entidad = 'permiso'  AND pe.id = s.entidad_id
+LEFT JOIN proyectos pr2 ON s.entidad = 'permiso' AND pr2.id = pe.proyecto_id
+LEFT JOIN organismos o  ON o.id = pe.organismo_id
+LEFT JOIN empresas  e   ON e.id = pr.empresa_id
+LEFT JOIN empresas  e2  ON e2.id = pr2.empresa_id;

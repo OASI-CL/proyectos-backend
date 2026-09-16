@@ -11,14 +11,26 @@ import organismosRouter from './routes/organismos'
 import catalogosRouter from './routes/catalogos'
 import catalogRouter from './routes/catalog'
 import adjuntosRouter from './routes/adjuntos'
+import approvalsRouter from './routes/approvals'
+import usuariosRouter from './routes/usuarios'
 
 const app = express()
 
 // En producción hay que restringir el origen al dominio de Amplify,
 // no dejarlo abierto (ver README).
 app.use(cors({
-  origin: process.env.CORS_ORIGIN ?? true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-dev-rol', 'x-dev-empresa-id', 'x-dev-organismo-id'],
+  origin: process.env.CORS_ORIGIN || true,
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    // Dev-mode role simulation headers. The backend ignores them when
+    // AUTH_MODE=cognito, but they still have to be allowed through CORS or
+    // the browser blocks the request before it ever reaches the API.
+    'x-dev-rol',
+    'x-dev-empresa-id',
+    'x-dev-organismo-id',
+    'x-dev-region',
+  ],
 }))
 app.use(express.json())
 
@@ -43,6 +55,8 @@ app.use('/organismos', requireAuth, organismosRouter)
 app.use('/catalogos', requireAuth, catalogosRouter)
 app.use('/catalog', requireAuth, catalogRouter)
 app.use('/adjuntos', requireAuth, adjuntosRouter)
+app.use('/approvals', requireAuth, approvalsRouter)
+app.use('/usuarios', requireAuth, usuariosRouter)
 
 // 404 para rutas no conocidas
 app.use((_req, res) => {
