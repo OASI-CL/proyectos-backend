@@ -9,9 +9,22 @@ that way). The app's user-facing text stays in Spanish.
 
 ## What gets created
 
-One CDK stack, `Oasi-<stage>`, in `infra/`. A single stack on purpose: this is
-a ~20-user internal system, and splitting it would add cross-stack plumbing
-for no benefit.
+Two CDK stacks in `infra/`:
+
+| Stack | Contains | Cost |
+|---|---|---|
+| `Oasi-Auth-<stage>` | Cognito user pool, 5 role groups, app client | **free** (50k MAU) |
+| `Oasi-<stage>` | VPC, RDS, Lambda, API Gateway, S3 | ~US$50/month, mostly NAT |
+
+Split on purpose: Cognito is the only free piece and the only one needed to
+build and test the login, so you can deploy it alone and pay nothing until
+the API actually has to be online. For just wiring up sign-in, see
+[`infra/COGNITO_SETUP.md`](infra/COGNITO_SETUP.md).
+
+```bash
+npx cdk deploy Oasi-Auth-dev -c stage=dev   # free
+npx cdk deploy Oasi-dev      -c stage=dev   # starts costing
+```
 
 | Piece | Service | Notes |
 |---|---|---|
@@ -311,12 +324,13 @@ These are real gaps, not hypotheticals:
 
 1. **`AUTH_MODE`.** The stack sets `cognito`. If it is ever `dev` in a
    deployed environment, anyone can pick their own role with an HTTP header.
-2. **The dev role switcher.** `Layout.tsx` still renders the role selector in
-   the top bar. It only works against `AUTH_MODE=dev`, but it should be
-   removed (or hidden behind `import.meta.env.DEV`) before real users see it.
-3. **Cognito login is not wired up yet.** The frontend reads a token from
-   `localStorage` (`src/lib/api.ts`) but nothing puts one there — `useAuth`
-   needs the `aws-amplify` sign-in flow. The backend side is done and verified;
-   the browser side is not.
-4. **No automated tests.** Everything so far has been verified by hand against
+2. **No automated tests.** Everything so far has been verified by hand against
    the real data.
+3. **Sign-in has not been tested against a real pool.** The flows are
+   implemented and verified end to end against Cognito's actual API (including
+   the first-login password challenge and the error mapping), but the only
+   pool available while building was a fake id, so the happy path stops at
+   "Cognito answered". Worth walking through once with a real user.
+
+The dev role switcher is no longer a concern: it renders only when the Cognito
+variables are absent, so a deployed build never shows it.

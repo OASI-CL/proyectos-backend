@@ -18,6 +18,9 @@ export interface OasiStackProps extends cdk.StackProps {
    * and redeploy. Never leave it open in production.
    */
   frontendOrigin?: string
+  /** From AuthStack, which is deployed separately (and is the free part). */
+  userPool: cognito.IUserPool
+  userPoolClient: cognito.IUserPoolClient
 }
 
 /**
@@ -96,52 +99,8 @@ export class OasiStack extends cdk.Stack {
       multiAz: false, // single AZ keeps the cost down; backups cover recovery
     })
 
-    // ------------------------------------------------------------------
-    // Auth — Cognito
-    //
-    // One group per app role. The backend reads the group from the JWT, but
-    // the `usuarios` table is authoritative because that is where the scope
-    // (which company / agency / region) lives.
-    // ------------------------------------------------------------------
-    const userPool = new cognito.UserPool(this, 'UserPool', {
-      userPoolName: `oasi-${stage}`,
-      // Internal system: accounts are created by an admin, never self-service.
-      selfSignUpEnabled: false,
-      signInAliases: { email: true },
-      autoVerify: { email: true },
-      standardAttributes: {
-        email: { required: true, mutable: true },
-        fullname: { required: true, mutable: true },
-      },
-      passwordPolicy: {
-        minLength: 12,
-        requireLowercase: true,
-        requireUppercase: true,
-        requireDigits: true,
-        requireSymbols: true,
-      },
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
-    })
-
-    for (const rol of ['admin', 'oasi', 'organismo', 'empresa', 'region']) {
-      new cognito.CfnUserPoolGroup(this, `Group-${rol}`, {
-        userPoolId: userPool.userPoolId,
-        groupName: rol,
-        description: `OASI role: ${rol}`,
-      })
-    }
-
-    const userPoolClient = userPool.addClient('WebClient', {
-      userPoolClientName: `oasi-${stage}-web`,
-      authFlows: { userSrp: true },
-      // SPA: no client secret, the browser cannot keep one.
-      generateSecret: false,
-      accessTokenValidity: cdk.Duration.hours(8),
-      idTokenValidity: cdk.Duration.hours(8),
-      refreshTokenValidity: cdk.Duration.days(30),
-      preventUserExistenceErrors: true,
-    })
+    // Cognito lives in AuthStack (deployed separately — it is the free part).
+    const { userPool, userPoolClient } = props
 
     // ------------------------------------------------------------------
     // Attachments bucket
@@ -250,14 +209,6 @@ export class OasiStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'ApiUrl', {
       value: restApi.url,
       description: 'VITE_API_URL for the frontend',
-    })
-    new cdk.CfnOutput(this, 'UserPoolId', {
-      value: userPool.userPoolId,
-      description: 'VITE_COGNITO_USER_POOL_ID',
-    })
-    new cdk.CfnOutput(this, 'UserPoolClientId', {
-      value: userPoolClient.userPoolClientId,
-      description: 'VITE_COGNITO_CLIENT_ID',
     })
     new cdk.CfnOutput(this, 'DbEndpoint', {
       value: database.dbInstanceEndpointAddress,
