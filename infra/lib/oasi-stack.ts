@@ -3,6 +3,7 @@ import { Construct } from 'constructs'
 import * as apigateway from 'aws-cdk-lib/aws-apigateway'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
 import * as ec2 from 'aws-cdk-lib/aws-ec2'
+import * as iam from 'aws-cdk-lib/aws-iam'
 import * as lambda from 'aws-cdk-lib/aws-lambda'
 import * as logs from 'aws-cdk-lib/aws-logs'
 import * as rds from 'aws-cdk-lib/aws-rds'
@@ -178,6 +179,21 @@ export class OasiStack extends cdk.Stack {
 
     dbCredentials.grantRead(api)
     attachmentsBucket.grantReadWrite(api)
+
+    // Lets an 'admin' user create/edit/remove people from the app itself
+    // (routes/usuarios.ts) instead of the AWS CLI. Scoped to this one user
+    // pool and to only the admin actions the app actually calls.
+    api.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: [
+          'cognito-idp:AdminCreateUser',
+          'cognito-idp:AdminAddUserToGroup',
+          'cognito-idp:AdminRemoveUserFromGroup',
+          'cognito-idp:AdminDeleteUser',
+        ],
+        resources: [userPool.userPoolArn],
+      }),
+    )
 
     // ------------------------------------------------------------------
     // API Gateway
