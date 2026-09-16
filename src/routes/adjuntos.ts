@@ -2,7 +2,14 @@ import { Router } from 'express'
 import { S3Client, DeleteObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3'
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { pool } from '../db/client'
-import { WhereBuilder, scopePermisos, puedeEscribir } from '../middleware/scope'
+import { puedeEscribir } from '../middleware/scope'
+import {
+  permisoVisible,
+  listAdjuntosPorPermiso,
+  crearAdjunto,
+  getAdjuntoPorId,
+  eliminarAdjunto,
+} from '../models/adjuntos'
 
 const router = Router()
 
@@ -24,15 +31,6 @@ function getS3(): S3Client {
   return s3Cache
 }
 
-/** Verifica que el permiso exista y esté dentro del scope del usuario. */
-async function permisoVisible(permisoId: number, user: Express.Request['user']): Promise<boolean> {
-  const wb = new WhereBuilder()
-  scopePermisos(wb, user!)
-  wb.add((i) => `id = $${i}`, permisoId)
-  const { rows } = await pool.query(`SELECT id FROM v_permisos ${wb.where}`, wb.params)
-  return rows.length > 0
-}
-
 /**
  * GET /adjuntos/permiso/:permisoId — lista los adjuntos de un permiso, cada
  * uno con una URL de descarga prefirmada (válida 5 minutos).
@@ -40,18 +38,11 @@ async function permisoVisible(permisoId: number, user: Express.Request['user']):
 router.get('/permiso/:permisoId', async (req, res, next) => {
   try {
     const permisoId = Number(req.params.permisoId)
-    if (!(await permisoVisible(permisoId, req.user))) {
+    if (!(await permisoVisible(pool, permisoId, req.user!))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
     }
 
-    const { rows } = await pool.query(
-      `SELECT a.*, u.nombre AS subido_por_nombre
-         FROM adjuntos a
-         LEFT JOIN usuarios u ON u.cognito_sub = a.uploaded_by
-        WHERE a.permiso_id = $1
-        ORDER BY a.created_at DESC`,
-      [permisoId],
-    )
+    const rows = await listAdjuntosPorPermiso(pool, permisoId)
 
     if (!s3Configurado()) {
       return res.json(rows.map((r) => ({ ...r, url: null })))
@@ -88,7 +79,7 @@ router.post('/permiso/:permisoId/url-subida', async (req, res, next) => {
     }
 
     const permisoId = Number(req.params.permisoId)
-    if (!(await permisoVisible(permisoId, req.user))) {
+    if (!(await permisoVisible(pool, permisoId, req.user!))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
     }
 
@@ -124,7 +115,7 @@ router.post('/permiso/:permisoId', async (req, res, next) => {
     }
 
     const permisoId = Number(req.params.permisoId)
-    if (!(await permisoVisible(permisoId, req.user))) {
+    if (!(await permisoVisible(pool, permisoId, req.user!))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
     }
 
@@ -133,13 +124,17 @@ router.post('/permiso/:permisoId', async (req, res, next) => {
       return res.status(400).json({ error: 'datos_invalidos', message: 'Faltan datos del archivo' })
     }
 
-    const { rows } = await pool.query(
-      `INSERT INTO adjuntos (permiso_id, nombre_archivo, s3_key, content_type, size_bytes, uploaded_by)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [permisoId, nombre_archivo, s3_key, content_type ?? null, size_bytes ?? null, req.user!.sub],
+    const adjunto = await crearAdjunto(
+      pool,
+      permisoId,
+      nombre_archivo,
+      s3_key,
+      content_type ?? null,
+      size_bytes ?? null,
+      req.user!.sub,
     )
 
-    res.status(201).json(rows[0])
+    res.status(201).json(adjunto)
   } catch (err) {
     next(err)
   }
@@ -154,18 +149,18 @@ router.delete('/:id', async (req, res, next) => {
       return res.status(403).json({ error: 'sin_permiso', message: 'Tu rol es de solo lectura' })
     }
 
-    const { rows } = await pool.query('SELECT * FROM adjuntos WHERE id = $1', [Number(req.params.id)])
-    if (rows.length === 0) {
+    const adjunto = await getAdjuntoPorId(pool, Number(req.params.id))
+    if (!adjunto) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Adjunto no encontrado' })
     }
-    if (!(await permisoVisible(rows[0].permiso_id, req.user))) {
+    if (!(await permisoVisible(pool, adjunto.permiso_id, req.user!))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Adjunto no encontrado' })
     }
 
     if (s3Configurado()) {
-      await getS3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: rows[0].s3_key }))
+      await getS3().send(new DeleteObjectCommand({ Bucket: BUCKET, Key: adjunto.s3_key }))
     }
-    await pool.query('DELETE FROM adjuntos WHERE id = $1', [Number(req.params.id)])
+    await eliminarAdjunto(pool, Number(req.params.id))
 
     res.status(204).send()
   } catch (err) {

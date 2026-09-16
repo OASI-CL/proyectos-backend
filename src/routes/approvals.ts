@@ -7,30 +7,17 @@ import {
   rechazarSolicitud,
 } from '../services/approvals'
 import { camelizeRows } from '../lib/camelize'
+import { scopeSolicitudes, listSolicitudes, countSolicitudesPendientes } from '../models/approvals'
 
 const router = Router()
 
 /**
- * Change requests (the approval queue).
- *
- * OASI/admin see every request. The other roles see the requests that fall
- * inside the scope they already have access to — not just the ones they
- * personally submitted, so a colleague at the same agency can follow up on
- * what the team sent. Scoping by entity (rather than by submitter) also means
- * the queue can never show a record the user is not allowed to read.
+ * Change requests (the approval queue). Scoping lives in models/approvals.ts
+ * (scopeSolicitudes): OASI/admin see every request, the other roles see the
+ * requests that fall inside the scope they already have access to — not just
+ * the ones they personally submitted, so a colleague at the same agency can
+ * follow up on what the team sent.
  */
-function scopeSolicitudes(wb: WhereBuilder, user: Express.Request['user']) {
-  if (!user || puedeAprobar(user)) return wb
-
-  if (user.rol === 'empresa') {
-    wb.add((n) => `empresa_id = $${n}`, user.empresaId ?? -1)
-  } else if (user.rol === 'organismo') {
-    wb.add((n) => `organismo_id = $${n}`, user.organismoId ?? -1)
-  } else if (user.rol === 'region') {
-    wb.add((n) => `region = $${n}`, user.region ?? '')
-  }
-  return wb
-}
 
 /**
  * GET /approvals?estado=pendiente
@@ -42,19 +29,9 @@ router.get('/', async (req, res, next) => {
     scopeSolicitudes(wb, user)
 
     const estado = typeof req.query.estado === 'string' ? req.query.estado : 'pendiente'
-    if (estado !== 'todas') {
-      wb.add((n) => `estado = $${n}`, estado)
-    }
-
     const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 100))
-    const limitIdx = wb.push(limit)
 
-    const { rows } = await pool.query(
-      `SELECT * FROM v_solicitudes_cambio ${wb.where}
-        ORDER BY solicitado_at DESC
-        LIMIT $${limitIdx}`,
-      wb.params,
-    )
+    const rows = await listSolicitudes(pool, wb, estado, limit)
 
     res.json(camelizeRows(rows))
   } catch (err) {
@@ -68,14 +45,8 @@ router.get('/', async (req, res, next) => {
 router.get('/count', async (req, res, next) => {
   try {
     const wb = new WhereBuilder()
-    wb.addRaw(`estado = 'pendiente'`)
-    scopeSolicitudes(wb, req.user)
-
-    const { rows } = await pool.query(
-      `SELECT count(*)::int AS pendientes FROM v_solicitudes_cambio ${wb.where}`,
-      wb.params,
-    )
-    res.json({ pendientes: rows[0].pendientes })
+    const pendientes = await countSolicitudesPendientes(pool, wb, req.user)
+    res.json({ pendientes })
   } catch (err) {
     next(err)
   }

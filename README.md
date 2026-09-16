@@ -15,25 +15,36 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 ## Estado actual
 
 ✅ Hecho:
-- `db/schema.sql` — schema completo: tablas, triggers de auditoría, 6 vistas
+- `db/schema.sql` — schema completo: tablas, triggers de auditoría, vistas
 - `db/seed.py` — carga el Excel origen a Postgres, probado con datos reales
   (317 proyectos, 1.552 permisos, 12 ministerios, 19 organismos)
 - Todas las rutas de la API (ver "Endpoints" abajo)
-- `src/middleware/scope.ts` — filtro por empresa/organismo según rol, aplicado
-  en el backend en cada consulta
-- `src/services/historial.ts` — diff campo a campo en cada UPDATE, dentro de
-  la misma transacción
+- `src/models/` — todo el SQL de la app, separado de las rutas (ver
+  "Estructura de carpetas")
+- `src/middleware/scope.ts` — filtro por empresa/organismo/región según rol,
+  aplicado en el backend en cada consulta (`WhereBuilder`)
+- Los 5 roles (`admin`, `oasi`, `organismo`, `empresa`, `region`) y el flujo
+  de solicitudes de cambio (`src/services/approvals.ts`,
+  `src/routes/approvals.ts`) — ver "Reglas de acceso" abajo
 - `src/routes/adjuntos.ts` — URLs prefirmadas de S3 para subir/descargar
+- Login real con Cognito (`src/middleware/auth.ts`, `AUTH_MODE=cognito`) y
+  alta/edición/baja de usuarios desde la propia app
+  (`src/services/cognitoUsers.ts`, `src/routes/usuarios.ts`) — no hace falta
+  la consola de AWS salvo para crear el primer admin
+- `infra/` — stacks de CDK para desplegar todo (ver "Deploy" abajo)
 
 🚧 Pendiente:
-- **Cognito.** `src/middleware/auth.ts` ya tiene la verificación contra el
-  JWKS escrita, pero hoy el server corre con `AUTH_MODE=dev`, que arma un
-  usuario falso a partir de headers `x-dev-*` (así el frontend puede tener un
-  selector de rol para probar cada vista). **En producción tiene que ir
-  `AUTH_MODE=cognito`.**
-- **S3.** Las rutas de adjuntos funcionan pero necesitan `S3_BUCKET_ADJUNTOS`
-  y `AWS_REGION` configurados; sin eso responden 503 con un mensaje claro.
-- CRUD de usuarios (depende de que exista el User Pool).
+- Desplegar el `OasiStack` (RDS + Lambda + API Gateway + S3) en la cuenta
+  real — hoy solo está desplegado `Oasi-Auth-dev` (Cognito, gratis). Ver
+  `infra/COGNITO_SETUP.md` y `DEPLOYMENT.md`.
+- Generar un build real de `dist-lambda/` (`npm run build:lambda`) antes de
+  ese deploy — el que hay en el repo hoy es un placeholder de una prueba de
+  `cdk synth`, no un bundle real.
+- Amplify Hosting para el frontend.
+- No hay tests automatizados.
+- `src/routes/catalogos.ts` (español) y `src/routes/catalog.ts` (inglés)
+  siguen coexistiendo — comparten el SQL vía `src/models/catalog.ts`, pero el
+  primero solo se saca cuando el frontend termine de migrar a `/catalog`.
 
 ---
 
@@ -56,33 +67,52 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 
 ```
 proyectos-backend/
-  handler.ts              entry point Lambda (envuelve src/app.ts con serverless-http)
+  handler.ts               entry point Lambda (envuelve src/app.ts con serverless-http)
   src/
-    app.ts                app de Express: middlewares globales + monta las rutas
+    app.ts                 app de Express: middlewares globales + monta las rutas
     app.local.ts           levanta app.ts con app.listen() para desarrollo local
     db/
-      client.ts            pool de conexiones pg, lee credenciales de .env
+      client.ts            pool de conexiones pg, lee credenciales de .env o Secrets Manager
+      sql.ts                fragmentos SQL compartidos (estado de tramitación, días de atraso)
     middleware/
       auth.ts              verifica JWT contra JWKS de Cognito (o usuario falso en AUTH_MODE=dev)
-      scope.ts              inyecta el filtro por rol + WhereBuilder para queries parametrizadas
-    routes/
-      dashboard.ts          KPIs y datos de los gráficos
-      proyectos.ts          lista, detalle, alta, permisos del proyecto
-      permisos.ts           lista, detalle, edición, historial, exportación CSV
-      comites.ts             sesiones y tabla por comité
-      organismos.ts          resumen por organismo
-      adjuntos.ts             URLs prefirmadas de S3
-      catalogos.ts            listas para dropdowns
-    services/
+      scope.ts             WhereBuilder + filtro por rol (empresa/organismo/región) para queries parametrizadas
+    models/                 todo el SQL de la app — nada de SQL vive en routes/
+      proyectos.ts          queries de proyectos (lista, detalle, alta, permisos del proyecto)
+      permisos.ts            queries de permisos (lista, detalle, edición, historial)
+      comites.ts              sesiones y tabla por comité
+      organismos.ts           resumen por organismo
+      catalog.ts               listas para dropdowns (usado por /catalog y /catalogos)
+      adjuntos.ts               adjuntos (metadata en Postgres; el archivo en sí vive en S3)
+      usuarios.ts                alta/edición/baja de filas en la tabla `usuarios`
+      approvals.ts                 lectura de `solicitudes_cambio` (el alta/aprobación compleja vive en services/)
+      dashboard.ts                 todas las queries de agregación de los gráficos del dashboard
+    routes/                 capa HTTP: parsea el request, chequea permisos, llama a models/, arma la respuesta
+      dashboard.ts, proyectos.ts, permisos.ts, comites.ts, organismos.ts,
+      catalog.ts, catalogos.ts, adjuntos.ts, approvals.ts, usuarios.ts
+    services/                lógica de negocio que no es una simple query (transacciones multi-tabla, AWS SDK)
       historial.ts           diff campo a campo + escritura en `historial`
+      approvals.ts            crea/aprueba/rechaza solicitudes de cambio (transaccional)
+      cognitoUsers.ts          alta/edición/baja de cuentas en el User Pool de Cognito
     shared/
       types.ts               tipos compartidos con el frontend (ver nota abajo)
   db/
     schema.sql              schema completo de Postgres (tablas + vistas)
+    migrations/               cambios incrementales sobre una BD ya sembrada (idempotentes)
     seed.py                  carga el Excel origen -> Postgres
+  infra/                    CDK: AuthStack (Cognito, gratis) + OasiStack (VPC/RDS/Lambda/API GW/S3)
   data/                     (no versionado) acá va el Excel origen, ver abajo
   .venv/                    (no versionado) entorno virtual Python para seed.py
 ```
+
+**Por qué `models/` y no un ORM:** las instrucciones del proyecto piden SQL
+crudo parametrizado, no un ORM — pero eso no significa que el SQL tenga que
+vivir mezclado con el parseo del request adentro de cada archivo de `routes/`.
+`models/` es esa separación: cada función recibe lo que necesita (un
+`WhereBuilder` ya armado por la ruta con el scope del usuario, un `pool` o
+`client` de Postgres, algún parámetro) y devuelve filas — no conoce Express,
+no arma respuestas HTTP, no decide códigos de estado. Las rutas quedan
+livianas: piden el request, chequean permiso, llaman al modelo, responden.
 
 **Sobre `src/shared/types.ts`:** este backend y el frontend son dos repos
 separados, así que no hay una carpeta compartida real entre ambos. Este
@@ -197,7 +227,11 @@ curl http://localhost:3001/health
 |---|---|
 | `npm run dev` | Levanta `src/app.local.ts` con `tsx watch` (recarga en caliente) |
 | `npm run build` | Compila TypeScript a `dist/` (`tsc`) |
-| `npm start` | Corre el build compilado (`node dist/handler.js`) — para probar el bundle de Lambda |
+| `npm start` | Corre el build compilado (`node dist/handler.js`) — para probar sin Lambda |
+| `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción, listo para subir a Lambda |
+| `npm run migrate` | Aplica las migraciones de `db/migrations/` contra la BD apuntada en `.env` |
+| `npm run infra:diff` | `cd infra && cdk diff` — qué cambiaría un deploy sin aplicarlo |
+| `npm run infra:deploy` | `cd infra && cdk deploy` |
 
 ---
 
@@ -210,33 +244,55 @@ de `scope.ts` según el rol. Las URLs usan el **id numérico**, no el del Excel.
 |---|---|---|
 | GET | `/health` | Chequeo de que el server está vivo |
 | GET | `/me` | Usuario actual (rol y scope) |
-| GET | `/dashboard` | KPIs, pendientes por organismo, evolución por comité, semáforo, 10 permisos más antiguos |
-| GET | `/catalogos` | Listas para los dropdowns: organismos, ministerios, empresas, regiones, sectores, etapas |
+| GET | `/dashboard` | Todo lo que arma el dashboard: KPIs, distribución por estado RCA, línea de tiempo, permisos por región/organismo, treemap por sector. Filtros compartidos (mismo `buildScope` para permisos y proyectos): `region`, `sector`, `etapa`, `organismo_id`, `empresa_id`, `fecha_inicio_desde/hasta` |
+| GET | `/catalogos` | Listas para los dropdowns, en español (versión anterior, algunas páginas del frontend todavía la usan) |
+| GET | `/catalog` | Lo mismo que `/catalogos` pero en inglés — usado por el dashboard nuevo. Ambas comparten el SQL en `src/models/catalog.ts` |
 | GET | `/permisos` | Lista paginada. Filtros: `organismo_id`, `ministerio_id`, `empresa_id`, `proyecto_id`, `estado`, `tramo` (`menos_3`/`entre_3_6`/`mas_6`), `region`, `sector`, `critico`, `habilitante`, `fecha_ingreso_desde/hasta`, `id_excel`, `q`. Orden: `sortBy`, `sortDir`. Paginación: `page`, `pageSize` |
 | GET | `/permisos/export` | Los mismos filtros, devuelve CSV (se abre en Excel) |
 | GET | `/permisos/:id` | Detalle |
 | GET | `/permisos/:id/historial` | Historial de cambios con nombre de usuario |
-| PATCH | `/permisos/:id` | Edita y escribe el diff en `historial`, en una transacción |
+| PATCH | `/permisos/:id` | Edita. Si el rol no escribe directo, queda en `solicitudes_cambio` pendiente de aprobación en vez de aplicarse |
 | GET | `/proyectos` | Lista paginada. Filtros: `empresa_id`, `sector`, `region`, `etapa`, `con_permisos_6meses`, `sin_pendientes`, `id_excel`, `q` |
 | GET | `/proyectos/:id` | Detalle |
 | GET | `/proyectos/:id/permisos` | Permisos de ese proyecto |
-| POST | `/proyectos` | Crear (queda con `id_excel = NULL`) |
-| POST | `/proyectos/:id/permisos` | Agregar un permiso al proyecto |
+| POST | `/proyectos` | Crear (queda con `id_excel = NULL`). Si lo crea una `empresa`, en `estado_validacion = 'en_revision'` y genera una solicitud de aprobación |
+| POST | `/proyectos/:id/permisos` | Agregar un permiso al proyecto (misma lógica de aprobación) |
 | GET | `/comites` | Lista de sesiones con su resumen |
 | GET | `/comites/:numero` | Tabla del comité, calculada **a la fecha de esa sesión** |
-| GET | `/organismos` | Resumen por organismo |
+| GET | `/organismos` | Resumen por organismo, respetando el scope del usuario |
 | GET | `/adjuntos/permiso/:id` | Adjuntos con URL de descarga prefirmada |
 | POST | `/adjuntos/permiso/:id/url-subida` | URL prefirmada para subir a S3 |
 | POST | `/adjuntos/permiso/:id` | Registra el archivo ya subido |
 | DELETE | `/adjuntos/:id` | Borra el registro y el objeto en S3 |
+| GET | `/approvals` | Cola de solicitudes de cambio pendientes (`?estado=pendiente/aprobada/rechazada`), filtrada por scope |
+| GET | `/approvals/count` | Cantidad pendiente, para el badge del menú |
+| POST | `/approvals/:id/approve` | OASI/admin aprueba: aplica el cambio + escribe `historial`, en una transacción |
+| POST | `/approvals/:id/reject` | OASI/admin rechaza (una creación rechazada vuelve a `borrador`, no se borra) |
+| GET | `/usuarios` | Lista de usuarios — solo `admin` |
+| POST | `/usuarios` | Crea la cuenta en Cognito (le manda el mail con contraseña temporal) y la fila en `usuarios`, atómico — solo `admin` |
+| PATCH | `/usuarios/:id` | Edita rol/alcance; si cambia el rol, sincroniza el grupo en Cognito — solo `admin` |
+| DELETE | `/usuarios/:id` | Borra la cuenta en Cognito y la fila — solo `admin` |
 
 ### Reglas de acceso
 
-- Si un usuario `empresa` pide un permiso o proyecto que no es suyo, la
-  respuesta es **404**, no 403: no se revela que el recurso existe.
-- `organismo_lector` es de solo lectura y solo ve los permisos de su organismo.
-- Los proyectos y permisos creados por una `empresa` quedan en
-  `estado_validacion = 'en_revision'`.
+Cinco roles: `admin`, `oasi`, `organismo`, `empresa`, `region`. El filtro por
+rol se aplica **en el backend**, en cada query (`middleware/scope.ts`) — lo
+que hace el frontend es solo conveniencia, nunca la única barrera.
+
+- **admin**: administra usuarios y permisos; ve todo.
+- **oasi**: ve todo, aprueba/rechaza las solicitudes de cambio de `organismo`
+  y `empresa`.
+- **organismo**: solo ve/edita los permisos de su propio organismo (y los
+  proyectos asociados). Sus ediciones quedan pendientes de aprobación de OASI.
+- **empresa**: solo ve sus propios proyectos y permisos. Puede crear
+  proyectos y agregar permisos, también pendientes de aprobación de OASI.
+- **region**: solo lectura, ve todos los proyectos/permisos (de cualquier
+  organismo) que caen en su región.
+- Si un usuario pide un permiso o proyecto fuera de su scope, la respuesta es
+  **404**, no 403: no se revela que el recurso existe.
+- `empresa`, `organismo` y `region` necesitan su columna de alcance
+  (`empresa_id`/`organismo_id`/`region`) seteada en `usuarios` — si falta, el
+  login se rechaza (falla cerrado, no muestra todo por accidente).
 
 ---
 
@@ -294,23 +350,67 @@ resumen:
 
 ## Deploy
 
-Pensado para AWS Lambda + API Gateway:
+Infra como código en `infra/` (CDK, TypeScript), dos stacks separados para
+poder probar el login sin pagar el resto:
 
-- `handler.ts` es el entry point (envuelve `src/app.ts` con `serverless-http`)
-- `npm run build` genera `dist/handler.js`, que es lo que se sube a Lambda
-- La RDS de producción se configura vía las variables `DB_*` en el entorno de
-  Lambda (no en un `.env` commiteado)
-- CORS debe restringirse al dominio de Amplify en producción (hoy `cors()`
-  está abierto para desarrollo)
+- **`Oasi-Auth-dev`** (`infra/lib/auth-stack.ts`) — solo Cognito: User Pool +
+  5 grupos + app client. Gratis (Cognito es gratis hasta 50.000 usuarios
+  activos/mes). Guía completa: `infra/COGNITO_SETUP.md`.
+- **`Oasi-<stage>`** (`infra/lib/oasi-stack.ts`) — todo lo demás: VPC (1 NAT
+  gateway, no uno por AZ, para no duplicar el costo), RDS Postgres t3.micro,
+  Lambda (con `dist-lambda/` como código), API Gateway, bucket S3 de
+  adjuntos. Recibe el `userPool`/`userPoolClient` del stack anterior.
+
+Dos carpetas de build distintas, no confundir:
+
+- `dist/` — salida plana de `tsc` (`npm run build`), la usa `npm start` y el
+  desarrollo local.
+- `dist-lambda/` — lo que sube a Lambda: `dist/` **más** los `node_modules`
+  de producción empaquetados juntos en una sola carpeta. Lo genera
+  `npm run build:lambda` (`scripts/build-lambda.sh`). Hay que regenerarlo
+  antes de cada deploy real del `OasiStack`.
+
+Pasos generales (detalle completo en `DEPLOYMENT.md`):
+
+1. `cd infra && npx cdk deploy Oasi-Auth-dev -c stage=dev` — despliega Cognito.
+2. Crear el primer admin a mano (única vez que hace falta AWS CLI, ver
+   `infra/COGNITO_SETUP.md`) — desde ahí, el resto de los usuarios se crea
+   desde **Administración → Usuarios** en la propia app.
+3. `npm run build:lambda` en `proyectos-backend/`.
+4. `cd infra && npx cdk deploy Oasi-dev -c stage=dev` — despliega RDS, Lambda,
+   API Gateway y S3 (este paso sí genera costo, principalmente el NAT
+   gateway, ~US$32/mes).
+5. Aplicar `db/schema.sql` contra la RDS recién creada.
+6. Configurar el frontend (Amplify Hosting) con la URL de la API y los
+   valores de Cognito.
+
+`AUTH_MODE` decide cómo se autentica cada request:
+
+- `dev` — usuario falso armado desde headers `x-dev-*` (para desarrollo
+  local, el frontend tiene un selector de rol). **Nunca en un entorno
+  desplegado** — cualquiera podría elegir su propio rol.
+- `cognito` — verifica el JWT contra el JWKS del User Pool
+  (`aws-jwt-verify`). Es lo que setea el CDK en el Lambda automáticamente.
 
 ---
 
 ## Convenciones de código
 
 - TypeScript estricto
-- Queries siempre parametrizadas (`$1`, `$2`, ...), nunca concatenación de strings
+- Sin ORM: queries siempre parametrizadas (`$1`, `$2`, ...), nunca
+  concatenación de strings
+- El SQL vive en `src/models/`, no en `src/routes/`. Una ruta nueva se
+  escribe así: parsear el request → armar el scope con `WhereBuilder` →
+  llamar a la función de `models/` correspondiente → devolver la respuesta.
+  Si una query nueva no encaja en ningún archivo de `models/` existente, es
+  señal de que puede ser una entidad nueva, no una excusa para escribirla
+  inline en la ruta.
+- Lógica que no es "una query" (transacciones multi-tabla, llamadas al SDK de
+  AWS) va en `src/services/`, no en `models/` ni en `routes/`
 - Toda mutación que toque más de una tabla va en transacción (`BEGIN`/`COMMIT`)
 - Fechas: `DATE` en la BD, ISO `YYYY-MM-DD` en la API, `DD-MM-YYYY` solo en el
   render del frontend
+- Código nuevo (identificadores, comentarios) en inglés; el schema de la BD y
+  los strings de cara al usuario se quedan en español
 - El `sub` y los grupos de Cognito salen de `req.user`, poblado por
   `middleware/auth.ts`

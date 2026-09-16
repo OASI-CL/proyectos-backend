@@ -1,7 +1,7 @@
 import { Router } from 'express'
 import { pool } from '../db/client'
-import { rcaStatusSql } from '../db/sql'
 import { WhereBuilder, scopeProyectos } from '../middleware/scope'
+import { listMinisterios, listAgencies, listCompaniesWithProjects, listScopedProjectsForCatalog } from '../models/catalog'
 
 const router = Router()
 
@@ -26,62 +26,29 @@ router.get('/', async (req, res, next) => {
     scopeProyectos(projectScope, req.user!)
 
     const [ministries, agencies, companies, projects] = await Promise.all([
-      pool.query('SELECT id, nombre AS name FROM ministerios ORDER BY nombre'),
-
-      pool.query(`
-        SELECT o.id, o.nombre AS name, o.ministerio_id AS ministry_id
-          FROM organismos o
-         ORDER BY o.nombre
-      `),
-
-      pool.query(`
-        SELECT e.id, e.nombre AS name
-          FROM empresas e
-         WHERE EXISTS (SELECT 1 FROM proyectos pr WHERE pr.empresa_id = e.id)
-         ORDER BY e.nombre
-      `),
-
-      pool.query(
-        `SELECT
-           pr.id,
-           pr.id_excel,
-           pr.nombre                                  AS name,
-           pr.empresa_id                              AS company_id,
-           pr.sector,
-           pr.region,
-           pr.etapa                                   AS project_status,
-           (${rcaStatusSql('pr.estado_ambiental')})   AS rca_status,
-           -- ::int[] so the driver returns numbers; the int8 array parser
-           -- would hand back strings.
-           COALESCE(
-             (SELECT array_agg(DISTINCT pe.organismo_id)::int[]
-                FROM permisos pe WHERE pe.proyecto_id = pr.id),
-             '{}'
-           )                                          AS agency_ids
-         FROM v_proyectos pr
-         ${projectScope.where}
-         ORDER BY pr.nombre`,
-        projectScope.params,
-      ),
+      listMinisterios(pool).then((rows) => rows.map((r) => ({ id: r.id, name: r.nombre }))),
+      listAgencies(pool),
+      listCompaniesWithProjects(pool),
+      listScopedProjectsForCatalog(pool, projectScope),
     ])
 
     // Distinct values come from the projects the user can actually see, so a
     // company user does not get dropdown options that return nothing.
     const distinct = (key: 'sector' | 'region' | 'project_status') =>
-      [...new Set(projects.rows.map((row) => row[key]).filter(Boolean))].sort()
+      [...new Set(projects.map((row) => row[key]).filter(Boolean))].sort()
 
     res.json({
-      ministries: ministries.rows,
-      agencies: agencies.rows.map((a) => ({
+      ministries,
+      agencies: agencies.map((a) => ({
         id: a.id,
         name: a.name,
         ministryId: a.ministry_id,
       })),
-      companies: companies.rows,
+      companies,
       sectors: distinct('sector'),
       regions: distinct('region'),
       projectStatuses: distinct('project_status'),
-      projects: projects.rows.map((p) => ({
+      projects: projects.map((p) => ({
         id: p.id,
         idExcel: p.id_excel,
         name: p.name,

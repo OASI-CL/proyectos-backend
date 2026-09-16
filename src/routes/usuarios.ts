@@ -9,6 +9,15 @@ import {
   eliminarUsuarioCognito,
 } from '../services/cognitoUsers'
 import type { RolUsuario } from '../shared/types'
+import {
+  listUsuarios,
+  getUsuarioPorId,
+  getUsuarioRolEmail,
+  contarAdmins,
+  crearUsuario,
+  actualizarUsuario,
+  eliminarUsuario,
+} from '../models/usuarios'
 
 const router = Router()
 
@@ -50,13 +59,7 @@ function normalizarScope(rol: RolUsuario, body: Record<string, unknown>) {
 
 router.get('/', requireRol('admin'), async (_req, res, next) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT u.*, e.nombre AS empresa_nombre, o.nombre AS organismo_nombre
-         FROM usuarios u
-         LEFT JOIN empresas e ON e.id = u.empresa_id
-         LEFT JOIN organismos o ON o.id = u.organismo_id
-        ORDER BY u.nombre`,
-    )
+    const rows = await listUsuarios(pool)
     res.json(camelizeRows(rows))
   } catch (err) {
     next(err)
@@ -94,14 +97,14 @@ router.post('/', requireRol('admin'), async (req, res, next) => {
   }
 
   try {
-    const { rows } = await pool.query(
-      `INSERT INTO usuarios (cognito_sub, nombre, email, rol, empresa_id, organismo_id, region,
-                             created_by, updated_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$8)
-       RETURNING *`,
-      [sub, nombre, email, rol, scope.empresaId, scope.organismoId, scope.region, req.user!.sub],
-    )
-    res.status(201).json(camelizeRow(rows[0]))
+    const usuario = await crearUsuario(pool, {
+      sub, nombre, email, rol,
+      empresaId: scope.empresaId,
+      organismoId: scope.organismoId,
+      region: scope.region,
+      creadoPorSub: req.user!.sub,
+    })
+    res.status(201).json(camelizeRow(usuario))
   } catch (err) {
     // The Cognito account exists but the row doesn't — undo it rather than
     // leave a login nobody can see or manage in this screen.
@@ -126,11 +129,10 @@ router.post('/', requireRol('admin'), async (req, res, next) => {
 router.patch('/:id', requireRol('admin'), async (req, res, next) => {
   try {
     const b = req.body ?? {}
-    const actual = await pool.query('SELECT * FROM usuarios WHERE id = $1', [Number(req.params.id)])
-    if (actual.rows.length === 0) {
+    const previo = await getUsuarioPorId(pool, Number(req.params.id))
+    if (!previo) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Usuario no encontrado' })
     }
-    const previo = actual.rows[0]
 
     const rol = (b.rol ?? previo.rol) as RolUsuario
     const scope = normalizarScope(rol, { ...previo, ...b })
@@ -140,8 +142,8 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
     // Refuse to strip the last admin's own admin role via a self-edit gone
     // wrong — same guard as the delete route.
     if (previo.rol === 'admin' && rol !== 'admin') {
-      const { rows } = await pool.query(`SELECT count(*)::int AS n FROM usuarios WHERE rol = 'admin'`)
-      if (rows[0].n <= 1) {
+      const n = await contarAdmins(pool)
+      if (n <= 1) {
         return res.status(409).json({
           error: 'ultimo_admin',
           message: 'No podés sacarle el rol admin al único administrador.',
@@ -149,22 +151,14 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
       }
     }
 
-    const { rows } = await pool.query(
-      `UPDATE usuarios
-          SET nombre = COALESCE($1, nombre),
-              rol = $2,
-              empresa_id = $3,
-              organismo_id = $4,
-              region = $5,
-              updated_by = $6
-        WHERE id = $7
-        RETURNING *`,
-      [
-        b.nombre || null, rol,
-        scope.empresaId, scope.organismoId, scope.region,
-        req.user!.sub, Number(req.params.id),
-      ],
-    )
+    const actualizado = await actualizarUsuario(pool, Number(req.params.id), {
+      nombre: b.nombre || null,
+      rol,
+      empresaId: scope.empresaId,
+      organismoId: scope.organismoId,
+      region: scope.region,
+      actualizadoPorSub: req.user!.sub,
+    })
 
     if (rol !== previo.rol) {
       await cambiarGrupoCognito(previo.email, previo.rol as RolUsuario, rol).catch(() => {
@@ -174,7 +168,7 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
       })
     }
 
-    res.json(camelizeRow(rows[0]))
+    res.json(camelizeRow(actualizado))
   } catch (err) {
     next(err)
   }
@@ -182,15 +176,13 @@ router.patch('/:id', requireRol('admin'), async (req, res, next) => {
 
 router.delete('/:id', requireRol('admin'), async (req, res, next) => {
   try {
-    const objetivo = await pool.query('SELECT rol, email FROM usuarios WHERE id = $1', [
-      Number(req.params.id),
-    ])
-    if (objetivo.rows.length === 0) {
+    const objetivo = await getUsuarioRolEmail(pool, Number(req.params.id))
+    if (!objetivo) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Usuario no encontrado' })
     }
-    if (objetivo.rows[0].rol === 'admin') {
-      const { rows } = await pool.query(`SELECT count(*)::int AS n FROM usuarios WHERE rol = 'admin'`)
-      if (rows[0].n <= 1) {
+    if (objetivo.rol === 'admin') {
+      const n = await contarAdmins(pool)
+      if (n <= 1) {
         return res.status(409).json({
           error: 'ultimo_admin',
           message: 'No podés eliminar al único administrador.',
@@ -198,8 +190,8 @@ router.delete('/:id', requireRol('admin'), async (req, res, next) => {
       }
     }
 
-    await pool.query('DELETE FROM usuarios WHERE id = $1', [Number(req.params.id)])
-    await eliminarUsuarioCognito(objetivo.rows[0].email).catch(() => {
+    await eliminarUsuario(pool, Number(req.params.id))
+    await eliminarUsuarioCognito(objetivo.email).catch(() => {
       // The DB row is gone either way; an orphaned Cognito account can be
       // cleaned up by hand and does not block the person from being removed
       // from the app.

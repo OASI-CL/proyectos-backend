@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { pool } from '../db/client'
 import { WhereBuilder, scopePermisos } from '../middleware/scope'
+import { resumenPorOrganismo } from '../models/organismos'
 
 const router = Router()
 
@@ -21,32 +22,7 @@ router.get('/', async (req, res, next) => {
   try {
     const wb = new WhereBuilder()
     scopePermisos(wb, req.user!)
-
-    const { rows } = await pool.query(
-      `SELECT
-         p.organismo_id,
-         p.organismo_nombre,
-         p.ministerio_nombre,
-         count(*) FILTER (WHERE p.estado = 'Pendiente')::int              AS pendientes,
-         count(*) FILTER (WHERE p.estado = 'Pendiente'
-                            AND p.supera_6_meses)::int                    AS supera_6_meses,
-         round(avg(p.dias_tramitacion)
-               FILTER (WHERE p.estado = 'Pendiente'))::int                AS promedio_dias,
-         COALESCE((
-           SELECT sum(DISTINCT_pr.inversion_mmusd)
-             FROM (
-               SELECT DISTINCT p2.proyecto_id, p2.inversion_mmusd
-                 FROM v_permisos p2
-                WHERE p2.organismo_id = p.organismo_id
-                  AND p2.estado = 'Pendiente'
-             ) AS DISTINCT_pr
-         ), 0)                                                            AS inversion_bloqueada_mmusd
-       FROM v_permisos p
-       ${wb.where}
-       GROUP BY p.organismo_id, p.organismo_nombre, p.ministerio_nombre
-       ORDER BY pendientes DESC`,
-      wb.params,
-    )
+    const rows = await resumenPorOrganismo(pool, wb)
     res.json(rows)
   } catch (err) {
     next(err)
