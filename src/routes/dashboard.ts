@@ -29,6 +29,9 @@ interface DashboardFilters {
   companyId?: number
   projectId?: number
   rcaStatus?: string
+  /** ISO date (YYYY-MM-DD). Filters on proyectos.fecha_inicio_construccion. */
+  startDateFrom?: string
+  startDateTo?: string
 }
 
 function parseFilters(req: Request): DashboardFilters {
@@ -54,6 +57,8 @@ function parseFilters(req: Request): DashboardFilters {
     companyId: num('companyId'),
     projectId: num('projectId'),
     rcaStatus: str('rcaStatus'),
+    startDateFrom: str('startDateFrom'),
+    startDateTo: str('startDateTo'),
   }
 }
 
@@ -132,6 +137,22 @@ function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) {
     permitWhere.push(
       `p.proyecto_id IN (SELECT id FROM proyectos
          WHERE (${rcaStatusSql('estado_ambiental')}) = ${value})`,
+    )
+  }
+  // Project start date range (fecha_inicio_construccion). Projects with no
+  // start date at all are excluded once either end of the range is set.
+  if (filters.startDateFrom !== undefined) {
+    const value = sql.add(filters.startDateFrom)
+    projectWhere.push(`pr.fecha_inicio_construccion >= ${value}`)
+    permitWhere.push(
+      `p.proyecto_id IN (SELECT id FROM proyectos WHERE fecha_inicio_construccion >= ${value})`,
+    )
+  }
+  if (filters.startDateTo !== undefined) {
+    const value = sql.add(filters.startDateTo)
+    projectWhere.push(`pr.fecha_inicio_construccion <= ${value}`)
+    permitWhere.push(
+      `p.proyecto_id IN (SELECT id FROM proyectos WHERE fecha_inicio_construccion <= ${value})`,
     )
   }
 
