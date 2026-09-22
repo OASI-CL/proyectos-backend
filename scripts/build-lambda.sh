@@ -19,9 +19,8 @@ echo "==> Compilando TypeScript directo a dist-lambda/"
 rm -rf dist-lambda
 npx tsc -p tsconfig.json --outDir dist-lambda
 
-echo "==> Copiando los .sql que la Lambda lee en tiempo de ejecución"
+echo "==> Copiando las migraciones que la Lambda lee en tiempo de ejecución"
 mkdir -p dist-lambda/db
-cp db/schema.sql dist-lambda/db/
 cp -r db/migrations dist-lambda/db/
 
 echo "==> Instalando dependencias de producción"

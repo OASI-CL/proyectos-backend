@@ -3,7 +3,7 @@ OASI - Carga del Excel origen a PostgreSQL.
 
 Lee "20260904 Levantamiento de Permisos.xlsx" (esperado en backend/data/) y
 carga: ministerios, organismos, empresas, proyectos, permisos, comites y
-permisos_comite. Requiere que db/schema.sql ya se haya aplicado.
+permisos_comite. Requiere que las migraciones ya se hayan aplicado (npm run db:migrate).
 
 Uso:
     cd proyectos-backend
@@ -29,7 +29,7 @@ Decisiones de limpieza (ver notas en cada función):
 
 CATÁLOGOS (importante):
   regiones, sectores, etapas_proyecto, estados_permiso, ministerios y
-  organismos vienen PRE-CARGADOS por db/schema.sql, con ids explícitos y
+  organismos vienen PRE-CARGADOS por las migraciones, con ids explícitos y
   estables. Este script NO los inserta: busca cada valor del Excel por nombre
   y lo resuelve a su id. Si un valor del Excel no matchea ninguna fila del
   catálogo, el script ABORTA nombrando el valor, en vez de escribir un NULL
@@ -294,7 +294,7 @@ def read_permisos(wb):
 # ----------------------------------------------------------------------------
 # Resolución de catálogos
 #
-# Los catálogos ya están en la base (los carga schema.sql). Acá solo se los
+# Los catálogos ya están en la base (los cargan las migraciones). Acá solo se los
 # lee y se resuelve nombre -> id. Nada de INSERT: si el Excel trae un valor
 # que el catálogo no tiene, es un dato a revisar, no una fila a crear.
 # ----------------------------------------------------------------------------
@@ -309,7 +309,7 @@ def cargar_catalogo(cur, tabla):
     filas = cur.fetchall()
     if not filas:
         raise CatalogoError(
-            f"El catálogo '{tabla}' está vacío. ¿Se aplicó db/schema.sql completo? "
+            f"El catálogo '{tabla}' está vacío. ¿Corriste npm run db:migrate? "
             f"Los catálogos se cargan con el schema, no con este script."
         )
     return {nombre: id_ for nombre, id_ in filas}
@@ -364,7 +364,7 @@ def resolver_catalogos(cur, proyectos, permisos, organismos_en_permisos):
         raise CatalogoError(
             "Hay valores en el Excel que no existen en los catálogos de la base:\n"
             f"{detalle}\n"
-            "  Corregí el Excel, o agregá el valor al catálogo en db/schema.sql\n"
+            "  Corregí el Excel, o agregá el valor al catálogo en db/migrations/\n"
             "  (y a la migración correspondiente). No se escribió nada."
         )
 
@@ -436,7 +436,7 @@ def main():
     if args.dry_run:
         # Sin tocar la base no se pueden resolver los catálogos, así que se
         # listan los valores distintos que trae el Excel para poder cotejarlos
-        # a ojo contra db/schema.sql antes de la carga real.
+        # a ojo contra los catálogos de la base antes de la carga real.
         print()
         print("Valores de vocabulario controlado que trae el Excel:")
         for etiqueta, clave, filas in (
@@ -456,7 +456,7 @@ def main():
     cur = conn.cursor()
 
     try:
-        # -- catálogos: se LEEN, no se insertan (vienen de db/schema.sql) --
+        # -- catálogos: se LEEN, no se insertan (vienen de las migraciones) --
         # Se resuelve todo antes del primer INSERT: si falta algún valor, el
         # script aborta acá y la transacción no llegó a escribir nada.
         organismo_ids = resolver_catalogos(cur, proyectos, permisos, organismos_en_permisos)

@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1790045005712,
+      "tag": "0000_extensiones",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1790045006660,
+      "tag": "0001_tablas",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1790045007608,
+      "tag": "0002_triggers_vistas_catalogos",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1790045200195,
+      "tag": "0003_alinear_nombres_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1790045318133,
+      "tag": "0004_alinear_nombres_fk",
+      "breakpoints": true
+    }
+  ]
+}

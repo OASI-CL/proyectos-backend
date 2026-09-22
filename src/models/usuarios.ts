@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import type { RolUsuario } from '../shared/types'
+import { usuarios } from '../db/schema'
 
 /**
  * ============================================================================
@@ -26,20 +27,12 @@ import type { RolUsuario } from '../shared/types'
  * ============================================================================
  */
 
-export interface Usuario {
-  id: number
-  cognito_sub: string
-  nombre: string
-  email: string
-  rol: RolUsuario
-  empresa_id: number | null
-  organismo_id: number | null
-  region_id: number | null
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/usuarios.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Usuario = typeof usuarios.$inferSelect
 
 /** v_usuarios = usuarios + el alcance resuelto a nombres legibles. */
 export interface VUsuario extends Usuario {

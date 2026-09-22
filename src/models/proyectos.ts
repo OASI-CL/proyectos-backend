@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
 import type { EstadoValidacion, EtapaProyectoCodigo } from '../shared/types'
+import { proyectos } from '../db/schema'
 
 /**
  * ============================================================================
@@ -18,45 +19,12 @@ import type { EstadoValidacion, EtapaProyectoCodigo } from '../shared/types'
  */
 
 /** Columnas propias de la tabla base `proyectos`. */
-export interface Proyecto {
-  id: number
-  /** 'P183', etc. NULL si el proyecto se creó desde la app. Solo display, nunca FK. */
-  id_excel: string | null
-  nombre: string
-  /** Razón social del titular. Puede diferir del nombre de la empresa. */
-  titular: string | null
-  empresa_id: number
-  /** FK a `regiones`. Ver el catálogo: 90 = Interregional, 91 = Nivel Central. */
-  region_id: number | null
-  /** FK a `sectores`. */
-  sector_id: number | null
-  /** FK a `etapas_proyecto`. */
-  etapa_id: number | null
-  inversion_mmusd: number | null
-  empleo_construccion: number | null
-  empleo_operacion: number | null
-  /**
-   * Estado ambiental (RCA), ej. 'RCA aprobada'. Texto libre y CASI VACÍO en el
-   * Excel origen: 314 de 317 proyectos no lo traen. Ver rcaStatusSql() en
-   * db/sql.ts, que lo normaliza a approved/in_review/suspended/other/unknown.
-   */
-  estado_ambiental: string | null
-  fecha_inicio_construccion: string | null
-  fecha_inicio_operacion: string | null
-  /** '¿Habilitantes Aprobado?' del Excel origen. */
-  habilitantes_aprobado: boolean | null
-  /** Ingreso del proyecto al universo OASI (no al trámite de un permiso). */
-  fecha_ingreso: string | null
-  fecha_ultima_resolucion: string | null
-  observaciones_oasi: string | null
-  /** 'borrador' | 'en_revision' | 'validado'. Solo 'validado' entra a los reportes. */
-  estado_validacion: EstadoValidacion
-  // --- Auditoría (updated_at lo pone el trigger, nunca a mano) ---
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/proyectos.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Proyecto = typeof proyectos.$inferSelect
 
 /**
  * Columnas que AGREGA la vista `v_proyectos` sobre la tabla.

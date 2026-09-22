@@ -33,12 +33,12 @@ trap 'rm -f "$DUMP"' EXIT
 echo "==> Dumping data from local ${DB_NAME}"
 # Data only, as plain INSERTs (the Lambda runs it through the pg driver, which
 # cannot do COPY FROM stdin). Catalogs (regiones, sectores, ...) are left out:
-# schema.sql already seeds them with the same ids. Users, history and pending
+# las migraciones ya los cargan con los mismos ids. Usuarios, historial y
 # requests are left out too: they belong to each environment.
 #
 # --column-inserts, not --inserts: a database brought up to date by migrations
 # has added columns at the END of the table, while a fresh one built from
-# schema.sql has them in schema order. Positional INSERTs would put values in
+# una base nueva las tiene en el orden del modelo. Los INSERT por posición
 # the wrong columns; named ones do not care about order.
 pg_dump -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
   --data-only --column-inserts --no-owner --no-privileges --no-comments \

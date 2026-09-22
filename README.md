@@ -15,7 +15,9 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 ## Estado actual
 
 ✅ Hecho:
-- `db/schema.sql` — schema completo: tablas, triggers de auditoría, vistas
+- `src/db/schema/` — **el modelo de datos**: un archivo por tabla, con sus
+  columnas, claves foráneas e índices. Las migraciones y los tipos de
+  TypeScript se generan desde ahí
 - `db/seed.py` — carga el Excel origen a Postgres, probado con datos reales
   (317 proyectos, 1.552 permisos, 12 ministerios, 19 organismos)
 - Todas las rutas de la API (ver "Endpoints" abajo)
@@ -82,6 +84,8 @@ proyectos-backend/
     middleware/
       auth.ts              verifica JWT contra JWKS de Cognito (o usuario falso en AUTH_MODE=dev)
       scope.ts             WhereBuilder + filtro por rol (empresa/organismo/región) para queries parametrizadas
+      schema/               EL MODELO DE DATOS: un archivo por tabla, con columnas,
+                            claves foráneas e índices. Fuente de verdad de todo
     models/                 todo el SQL de la app — nada de SQL vive en routes/
       proyectos.ts          queries de proyectos (lista, detalle, alta, permisos del proyecto)
       permisos.ts            queries de permisos (lista, detalle, edición, historial)
@@ -102,8 +106,9 @@ proyectos-backend/
     shared/
       types.ts               tipos compartidos con el frontend (ver nota abajo)
   db/
-    schema.sql              schema completo de Postgres (tablas + vistas)
-    migrations/               cambios incrementales sobre una BD ya sembrada (idempotentes)
+    migrations/             generadas desde src/db/schema/, más las escritas a
+                            mano para lo que un modelo no expresa (vistas,
+                            triggers, datos de catálogos)
     seed.py                  carga el Excel origen -> Postgres
   infra/                    infraestructura en CDK (ver infra/README.md)
     config.ts                 TODA la configuración de los ambientes, en un archivo
@@ -120,14 +125,32 @@ proyectos-backend/
   .venv/                    (no versionado) entorno virtual Python para seed.py
 ```
 
-**Por qué `models/` y no un ORM:** las instrucciones del proyecto piden SQL
-crudo parametrizado, no un ORM — pero eso no significa que el SQL tenga que
-vivir mezclado con el parseo del request adentro de cada archivo de `routes/`.
-`models/` es esa separación: cada función recibe lo que necesita (un
-`WhereBuilder` ya armado por la ruta con el scope del usuario, un `pool` o
-`client` de Postgres, algún parámetro) y devuelve filas — no conoce Express,
-no arma respuestas HTTP, no decide códigos de estado. Las rutas quedan
-livianas: piden el request, chequean permiso, llaman al modelo, responden.
+### Dónde vive qué: `schema/` vs `models/`
+
+Son dos cosas distintas y conviene no confundirlas:
+
+| | `src/db/schema/` | `src/models/` |
+|---|---|---|
+| Qué es | **la estructura**: qué tablas hay, qué columnas, qué claves foráneas | **las consultas**: cómo se leen y escriben esos datos |
+| Quién lo usa | drizzle-kit, para generar las migraciones y los tipos | las rutas de la API |
+| Si lo cambiás | hay que generar una migración (`npm run db:generate`) | no toca la base |
+
+Los tipos de TypeScript de cada tabla **salen del modelo**
+(`typeof proyectos.$inferSelect`), no se escriben a mano en `models/`: así no
+pueden quedar desincronizados con la base.
+
+**Por qué las consultas siguen siendo SQL y no el ORM:** Drizzle se usa para
+el modelo y las migraciones. Las consultas siguen en SQL parametrizado porque
+las 8 vistas y las agregaciones del dashboard se expresan mucho mejor en SQL
+que en cualquier ORM. Pasarlas a la API de Drizzle es opcional y se puede
+hacer de a poco, entidad por entidad.
+
+Lo que sí se respeta siempre: **el SQL no vive mezclado con el parseo del
+request**. Cada función de `models/` recibe lo que necesita (un
+`WhereBuilder` ya armado por la ruta con el alcance del usuario, un `pool` o
+`client`, algún parámetro) y devuelve filas — no conoce Express, no arma
+respuestas HTTP, no decide códigos de estado. Las rutas quedan livianas:
+parsean el request, chequean permiso, llaman al modelo, responden.
 
 **Sobre `src/shared/types.ts`:** este backend y el frontend son dos repos
 separados, así que no hay una carpeta compartida real entre ambos. Este
@@ -188,24 +211,30 @@ partir de los headers `x-dev-rol`, `x-dev-empresa-id` y `x-dev-organismo-id`
 `S3_BUCKET_ADJUNTOS` y `AWS_REGION` solo se necesitan para los adjuntos; sin
 ellos esas rutas responden 503 y el resto de la API funciona igual.
 
-### 5. Aplicar el schema
+### 5. Crear las tablas
 
 ```bash
 npm run db:migrate -- --env=local
 ```
 
-Mira la base del `.env` y decide solo:
+Sobre la base del `.env`:
 
-- **vacía** → aplica `db/schema.sql` completo (con los catálogos cargados)
-- **con tablas pero sin historial de migraciones** (una base creada antes de
-  este sistema) → registra las migraciones existentes como ya aplicadas
-- **con historial** → aplica solo las migraciones de `db/migrations/` que
-  todavía no corrieron, cada una en su propia transacción
+- **vacía** → corre todas las migraciones en orden y queda lista, con los
+  catálogos cargados
+- **con historial** → aplica solo las que faltan, cada una en su propia
+  transacción
+- **con tablas pero sin historial** → se detiene y te pide declarar hasta
+  dónde está al día con `npm run db:baseline`. No adivina: marcar como
+  aplicada una migración que en realidad no corrió deja la base vieja en
+  silencio
 
-Lo que se aplicó queda en la tabla `_migrations`. Es el mismo código que corre
-en AWS después de cada deploy (`src/db/migrate.ts`). Cómo escribir una
-migración nueva: [`infra/README.md`](infra/README.md) → "Migraciones de base
-de datos".
+Lo aplicado queda en la tabla `_migrations`. Es el mismo código que corre en
+AWS después de cada deploy (`src/db/migrate.ts`).
+
+**Para cambiar el modelo de datos:** se edita el archivo de la tabla en
+`src/db/schema/`, se corre `npm run db:generate` (escribe la migración sola) y
+después `npm run db:migrate -- --env=local`. Detalle en
+[`infra/README.md`](infra/README.md) → "Migraciones de base de datos".
 
 ### 6. Cargar los datos del Excel (opcional, para tener datos reales)
 
@@ -258,6 +287,9 @@ curl http://localhost:3001/health
 | `npm run db:migrate -- --env=local` | Aplica las migraciones pendientes a la BD del `.env` |
 | `npm run db:migrate -- --env=dev` | Idem contra la base de dev en AWS (vía la Lambda `db-ops`) |
 | `npm run db:bootstrap` | Crea las bases y los usuarios de cada ambiente en el servidor RDS (una vez) |
+| `npm run db:generate` | **Después de editar un modelo:** escribe sola la migración con el cambio |
+| `npm run db:generate:custom` | Crea una migración vacía para SQL a mano (vistas, triggers, catálogos) |
+| `npm run db:baseline -- --env=... --hasta=...` | Declara que una base ya está al día hasta cierta migración (sin ejecutarla) |
 | `npm run build` | Revisa los tipos, sin generar archivos (`tsc --noEmit`) |
 | `npm start` | Corre el build compilado localmente (`dist-lambda/src/app.local.js`) |
 | `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
@@ -346,12 +378,12 @@ una columna aparte, `id_excel` (ej. `'P183'`, `'PM1377'`), que es solo
 informativo — nunca se usa como foreign key. Los proyectos/permisos creados
 desde la app tienen `id_excel = NULL`.
 
-### Catálogos (vocabulario controlado, con datos semilla en `schema.sql`)
+### Catálogos (vocabulario controlado, cargados por las migraciones)
 
-Todo lo que es una lista cerrada es una tabla con id, no texto libre. Van con
-los datos incluidos en `db/schema.sql` y con **id explícito y estable**, así
-`region_id = 3` significa lo mismo en tu base local, en dev y en producción.
-No dependen del Excel: se cargan junto con el schema.
+Todo lo que es una lista cerrada es una tabla con id, no texto libre. Sus
+datos van en una migración, con **id explícito y estable**, así `region_id = 3`
+significa lo mismo en tu base local, en dev y en producción. No dependen del
+Excel: se cargan al crear la base.
 
 | Tabla | Contenido |
 |---|---|
@@ -379,8 +411,8 @@ dos, y normalizar los catálogos no rompió el frontend.
 |---|---|
 | `v_permisos` | Permiso + proyecto + organismo + catálogos resueltos, con `dias_tramitacion`, `menos_3_meses`, `entre_3_y_6_meses`, `supera_6_meses`, `semaforo`, calculados contra `CURRENT_DATE` |
 | `v_proyectos` | Proyecto + catálogos + `total_permisos`, `permisos_pendientes`, `permisos_6meses`, `criticos_pendientes`, `sin_pendientes` |
-| `v_permisos_comite` | Igual que `v_permisos` pero calculado a la fecha del comité (`c.fecha`), no de hoy — reconstruye la tabla exacta presentada en cada sesión |
-| `v_resumen_comite` | Una fila por sesión: permisos en agenda, resueltos, promedio de días |
+| `v_permisos_comite` | Los permisos de cada sesión de comité, calculados a la fecha de esa sesión. **Acumulativo y estricto**: la tabla del comité N son los permisos que entraron en comités *anteriores* a N |
+| `v_resumen_comite` | Una fila por sesión: permisos en agenda, resueltos a esa fecha, promedio de días |
 | `v_resumen_organismo` | Por organismo: pendientes, +6 meses, promedio de días, inversión bloqueada |
 | `v_usuarios` | Usuario con su alcance resuelto a nombres (empresa / organismo / región) |
 | `v_historial` | Historial de cambios con nombre de usuario legible (join con `usuarios`) |
@@ -388,11 +420,16 @@ dos, y normalizar los catálogos no rompió el frontend.
 
 ### Dónde ver qué columnas tiene cada entidad
 
-Cada archivo de `src/models/` arranca con la lista completa de columnas de su
-entidad, en dos interfaces: las de la tabla base y las que **agrega la vista**
-encima (catálogos resueltos y valores derivados), con el comentario de cada
-campo cuando el dato tiene alguna trampa. Están verificadas contra la base, no
-escritas de memoria. Es el lugar para mirar antes de agregar un endpoint.
+**En `src/db/schema/`**, un archivo por tabla. Ahí está la lista completa de
+columnas con su tipo, sus claves foráneas, sus índices y un comentario en cada
+campo que tiene alguna trampa. Es lo que la base realmente tiene: no es una
+copia que pueda quedar vieja, porque de ahí salen las migraciones.
+
+Las **vistas** agregan columnas encima (catálogos resueltos y valores
+calculados). Esas sí están descritas a mano, en el archivo correspondiente de
+`src/models/` — son resultados de consulta, no tablas.
+
+Es el lugar para mirar antes de agregar un endpoint.
 
 ### Auditoría
 

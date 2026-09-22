@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
 import { registrarCambios } from '../services/historial'
+import { permisos } from '../db/schema'
 import type {
   EstadoPermiso,
   EstadoPermisoCodigo,
@@ -22,46 +23,12 @@ import type {
  */
 
 /** Columnas propias de la tabla base `permisos`. */
-export interface Permiso {
-  id: number
-  /** 'PM1377', etc. Solo display, nunca FK. */
-  id_excel: string | null
-  proyecto_id: number
-  organismo_id: number
-  /** 'Nombre Permiso' del Excel origen. */
-  nombre: string
-  /** 'Nombre Permiso Estándar': la nomenclatura normalizada del permiso. */
-  nombre_estandar: string | null
-  /** Texto libre, MUY heterogéneo en el Excel origen. */
-  tipo_permiso: string | null
-  n_expediente: string | null
-  /**
-   * 'Es crítico (Si/No)'. Viene VACÍO en todo el Excel origen, así que hoy
-   * está en false en todas las filas migradas: hay que revisarlo a mano.
-   */
-  critico: boolean
-  /** Construcción / operación / acceso al terreno / otro. */
-  que_habilita: string | null
-  /** Dato sucio en origen (Si/si/SI/2/textos largos); se normalizó a booleano. */
-  habilitante_construccion: boolean
-  /** FK a `estados_permiso`. NOT NULL, default 1 = Pendiente. */
-  estado_id: number
-  fecha_ingreso: string | null
-  fecha_resolucion_estimada: string | null
-  fecha_resolucion: string | null
-  /** 'Favorable' | 'No favorable' | texto libre (dato sucio en origen). */
-  tipo_resolucion: string | null
-  hito_tramitacion: string | null
-  incluido_catastro_hacienda: boolean | null
-  n_catastro: string | null
-  observaciones: string | null
-  estado_validacion: EstadoValidacion
-  // --- Auditoría ---
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/permisos.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Permiso = typeof permisos.$inferSelect
 
 /** Columnas que AGREGA la vista `v_permisos`. Ninguna existe como columna. */
 export interface VPermiso extends Permiso {

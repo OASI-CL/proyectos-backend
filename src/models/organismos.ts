@@ -1,33 +1,30 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
+import { ministerios, organismos } from '../db/schema'
 
 /**
  * ============================================================================
  * ORGANISMO / MINISTERIO — el organigrama del Estado.
  *
- * Son catálogos: vienen con datos semilla en db/schema.sql y no se cargan
+ * Son catálogos: vienen con datos semilla en las migraciones y no se cargan
  * desde el Excel. Un organismo (CONAF, DGA, SEA, ...) pertenece siempre a un
  * ministerio. Verificado contra `\d organismos` y `\d ministerios`.
  * ============================================================================
  */
 
-export interface Ministerio {
-  id: number
-  nombre: string
-  /** 'MOP', 'MINVU', ... NULL en 'Municipalidades', que no tiene sigla. */
-  sigla: string | null
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/ministerios.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Ministerio = typeof ministerios.$inferSelect
 
-export interface Organismo {
-  id: number
-  /** Sigla tal como viene del Excel. Solo display, nunca FK. */
-  id_excel: string | null
-  /** Sigla con la que se lo conoce, ej. 'CONAF'. UNIQUE. */
-  nombre: string
-  /** Nombre completo, para informes formales. */
-  nombre_largo: string | null
-  ministerio_id: number
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/organismos.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Organismo = typeof organismos.$inferSelect
 
 /** Una fila por organismo: lo que devuelve `v_resumen_organismo`. */
 export interface VResumenOrganismo {

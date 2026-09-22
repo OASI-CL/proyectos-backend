@@ -81,10 +81,9 @@ async function main() {
   console.log('ok  db-ops handler loads')
 
   // 3. The SQL the migration runner reads is inside the bundle.
-  assert.ok(fs.existsSync(path.join(bundle, 'db', 'schema.sql')), 'db/schema.sql missing from bundle')
   const migrations = fs.readdirSync(path.join(bundle, 'db', 'migrations')).filter((f) => f.endsWith('.sql'))
   assert.ok(migrations.length > 0, 'db/migrations missing from bundle')
-  console.log(`ok  SQL bundled: schema.sql + ${migrations.length} migration(s)`)
+  console.log(`ok  SQL bundled: ${migrations.length} migration(s)`)
 
   process.exit(0) // the pg pool would otherwise keep the process alive
 }

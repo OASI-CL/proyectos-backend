@@ -31,7 +31,7 @@ type DbOpsEvent =
   | { action: 'load-data'; key: string }
   | { action: 'create-admin'; sub: string; email: string; nombre: string }
 
-/** Tables the historical data load fills. Catalogs come with schema.sql. */
+/** Tables the historical data load fills. Catalogs come with the migrations. */
 const DATA_TABLES = ['empresas', 'proyectos', 'permisos', 'comites', 'permisos_comite']
 
 let s3: S3Client | null = null

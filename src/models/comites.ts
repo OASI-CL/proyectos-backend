@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
+import { comites, permisosComite } from '../db/schema'
 
 /**
  * ============================================================================
@@ -11,16 +12,12 @@ import { WhereBuilder } from '../middleware/scope'
  */
 
 /** Columnas de la tabla base `comites`. */
-export interface Comite {
-  id: number
-  /** Número de sesión. UNIQUE: es como se la nombra ("comité 7"). */
-  numero: number
-  fecha: string
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/comites.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Comite = typeof comites.$inferSelect
 
 /**
  * Columnas de `permisos_comite` (relación N:N permiso <-> sesión).
@@ -31,15 +28,12 @@ export interface Comite {
  * sesión que se mira. Las columnas quedan por si vuelve a hacer falta el dato
  * congelado.
  */
-export interface PermisoComite {
-  id: number
-  permiso_id: number
-  comite_id: number
-  /** FK a `estados_permiso`: el estado congelado a la fecha de la sesión. */
-  estado_snapshot_id: number | null
-  dias_snapshot: number | null
-  compromiso: string | null
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/permisosComite.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type PermisoComite = typeof permisosComite.$inferSelect
 
 /**
  * Una fila por sesión: lo que devuelve `v_resumen_comite`.

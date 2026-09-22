@@ -204,15 +204,43 @@ tres casos (`src/db/migrate.ts`).
 Lo aplicado queda registrado en la tabla `_migrations`; cada archivo corre una
 sola vez por base.
 
-**Para escribir una migración nueva:**
+**Para cambiar la estructura de la base** (agregar una columna, una tabla, un
+índice) NO se escribe SQL a mano:
 
-1. Creá `db/migrations/NNN_descripcion.sql` con el número siguiente.
-2. **No pongas `BEGIN`/`COMMIT`**: el runner envuelve cada archivo y su
-   registro en una transacción, así un error no deja nada a medias.
-3. Aplicá el mismo cambio a `db/schema.sql`, para que una base nueva nazca igual.
-4. Nada de comandos de psql (líneas que empiezan con `\`): esto corre por el
-   driver, no por psql.
-5. Probá con `--env=local`, después subí. El CI la aplica sola al desplegar.
+```bash
+# 1. editás el archivo de la tabla en src/db/schema/
+# 2. drizzle-kit compara el modelo con lo último aplicado y escribe el SQL:
+npm run db:generate
+# 3. lo aplicás:
+npm run db:migrate -- --env=local
+```
+
+**Para lo que un modelo no puede expresar** (una vista, un trigger, datos de
+un catálogo) se crea una migración vacía y se escribe el SQL a mano:
+
+```bash
+npm run db:generate:custom
+```
+
+Reglas en los dos casos:
+
+- **Sin `BEGIN`/`COMMIT` adentro**: el runner envuelve cada archivo y su
+  registro en una transacción, así un error no deja nada a medias.
+- Nada de comandos de psql (líneas que empiezan con `\`): esto corre por el
+  driver de Postgres, no por psql.
+- **Una migración ya aplicada no se edita nunca**: se escribe otra. Editarla
+  no cambia las bases donde ya corrió.
+- Probá con `--env=local`, después subí. El CI la aplica sola al desplegar.
+
+**Si una base tiene tablas pero no historial** (por ejemplo una copia vieja),
+el runner se detiene y pide declarar hasta dónde está al día:
+
+```bash
+npm run db:baseline -- --env=local --hasta=0002_triggers_vistas_catalogos.sql
+```
+
+Lo hace a propósito en vez de adivinar: marcar como aplicada una migración que
+en realidad nunca corrió deja la base desactualizada **sin que nada avise**.
 
 Escribí migraciones que funcionen mientras la versión **anterior** de la API
 todavía está respondiendo (agregar una columna antes de usarla; dejar de usar

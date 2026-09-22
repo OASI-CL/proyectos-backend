@@ -1,7 +1,7 @@
 /**
  * Shared SQL expressions.
  *
- * NOTE ON LANGUAGE: the database schema (db/schema.sql) is in Spanish because
+ * NOTE ON LANGUAGE: the database schema (src/db/schema/) is in Spanish because
  * it already holds production data. Application code is in English, so every
  * query aliases columns to English names at this boundary.
  */

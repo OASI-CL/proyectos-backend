@@ -3,48 +3,51 @@ import path from 'node:path'
 import type { Pool, PoolClient } from 'pg'
 
 /**
- * Database migrations, with a record of what has already been applied.
+ * ============================================================================
+ * Aplicador de migraciones
+ * ============================================================================
  *
- * One implementation, used everywhere:
- *   local   npm run db:migrate -- --env=local  (scripts/db.ts)
- *   AWS     npm run db:migrate -- --env=dev|prod, which invokes that
- *           environment's db-ops Lambda (src/ops/dbOps.ts). CI runs the same
- *           command after every deploy.
+ * Una sola implementación, usada en los dos lados:
+ *   local   npm run db:migrate -- --env=local        (scripts/db.ts)
+ *   AWS     npm run db:migrate -- --env=dev|prod, que invoca la Lambda
+ *           db-ops del ambiente (src/ops/dbOps.ts). El CI corre lo mismo
+ *           después de cada deploy.
  *
- * The runner looks at the database and picks one of two paths:
+ * `db/migrations/` es la ÚNICA fuente de verdad del estado de la base. Una
+ * base vacía se construye corriendo todas las migraciones en orden; ya no
+ * existe un `schema.sql` que se aplique aparte. (Antes existía, y había que
+ * escribir cada cambio dos veces: si alguien se olvidaba de una, una base
+ * nueva y una migrada quedaban distintas en silencio.)
  *
- *   fresh        no tables yet -> apply db/schema.sql (the full current
- *                model) and mark every file in db/migrations/ as applied,
- *                since schema.sql already contains all of them.
- *   incremental  apply, in filename order, every migration not yet recorded.
+ * Los archivos los escribe drizzle-kit a partir de los modelos de
+ * `src/db/schema/`:
+ *
+ *   npm run db:generate          escribe el SQL de lo que cambió en el modelo
+ *   npm run db:generate:custom   crea una migración vacía para SQL a mano
+ *                                (vistas, triggers, datos de catálogos)
  *
  * Si la base tiene tablas pero NO tiene historial (`_migrations`), el runner
- * se DETIENE y pide un baseline explícito:
+ * se DETIENE y pide declarar hasta dónde está al día:
  *
- *   npm run db:baseline -- --env=local --hasta=002_catalogos.sql
+ *   npm run db:baseline -- --env=local --hasta=0002_triggers_vistas_catalogos.sql
  *
  * Antes eso se hacía solo, asumiendo que una base sin historial estaba al día.
  * Era peligroso: si había una migración nueva, quedaba marcada como aplicada
- * SIN ejecutarse, y la base se quedaba vieja en silencio. Pasó de verdad con
- * 003_comite_acumulado.sql. Ahora hay que declarar hasta dónde está la base.
+ * SIN ejecutarse y la base se quedaba vieja sin que nada avisara. Pasó de
+ * verdad con el cambio del conteo por comité.
  *
- * WRITING A NEW MIGRATION
- *   - name it NNN_description.sql, the next number in db/migrations/
- *   - do NOT put BEGIN/COMMIT in it: the runner wraps each file and its
- *     _migrations row in one transaction, so a failure leaves nothing
- *     half-applied and nothing recorded
- *   - apply the same change to db/schema.sql, so fresh databases get it too
- *   - no psql meta-commands (lines starting with a backslash): this runs
- *     through the pg driver, not psql
- *
- * (001 and 002 predate these rules and carry their own BEGIN/COMMIT. They
- * never run through here: every database that could need them is either
- * fresh or baselined.)
+ * REGLAS PARA UNA MIGRACIÓN NUEVA
+ *   - se genera con `npm run db:generate` después de editar un modelo; a mano
+ *     solo las que un modelo no puede expresar
+ *   - sin BEGIN/COMMIT adentro: el runner envuelve cada archivo y su registro
+ *     en una transacción, así un error no deja nada a medias
+ *   - sin comandos de psql (líneas que empiezan con barra invertida): esto
+ *     corre por el driver de Postgres, no por psql
+ *   - una migración ya aplicada NO se edita nunca: se escribe otra
  */
 
 const SQL_DIR = process.env.DB_SQL_DIR ?? path.join(__dirname, '..', '..', 'db')
 const MIGRATIONS_DIR = path.join(SQL_DIR, 'migrations')
-const SCHEMA_FILE = path.join(SQL_DIR, 'schema.sql')
 
 /** Arbitrary constant: serializes concurrent runs (two deploys at once). */
 const LOCK_KEY = 947_210_331
@@ -133,6 +136,10 @@ export async function baselineMigrations(
   const client = await pool.connect()
   try {
     await client.query(CREATE_TRACKING_TABLE)
+    // Limpia registros de archivos que ya no existen (por ejemplo migraciones
+    // viejas que se aplastaron en una inicial): el historial tiene que hablar
+    // de los archivos que hay hoy, no de los que hubo.
+    await client.query('DELETE FROM _migrations WHERE nombre <> ALL($1::text[])', [files])
     await record(client, marcar)
     log(`Marcadas como aplicadas (sin ejecutar): ${marcar.join(', ')}`)
     const pendientes = files.slice(corte + 1)
@@ -152,34 +159,24 @@ export async function runMigrations(pool: Pool, log: (msg: string) => void = con
 
     const files = await migrationFiles()
     await renameLegacyTrackingTable(client)
-    const hasSchema = await tableExists(client, 'public.proyectos')
-    const hasTracking = await tableExists(client, 'public._migrations')
-
-    if (!hasSchema) {
-      log('Empty database: applying db/schema.sql')
-      const schema = await readSql(SCHEMA_FILE)
-      await client.query('BEGIN')
-      inTransaction = true
-      await client.query(schema)
-      await client.query(CREATE_TRACKING_TABLE)
-      await record(client, files)
-      await client.query('COMMIT')
-      inTransaction = false
-      return { mode: 'fresh', applied: ['schema.sql'] }
-    }
+    const tieneTablas = await tableExists(client, 'public.proyectos')
+    const tieneHistorial = await tableExists(client, 'public._migrations')
 
     // Base con tablas pero sin historial: no se puede adivinar hasta dónde
     // está al día, así que se pide declararlo (ver BaselineRequiredError).
-    if (!hasTracking) throw new BaselineRequiredError(files)
+    if (tieneTablas && !tieneHistorial) throw new BaselineRequiredError(files)
+
+    await client.query(CREATE_TRACKING_TABLE)
 
     const { rows } = await client.query<{ nombre: string }>('SELECT nombre FROM _migrations')
     const done = new Set(rows.map((r) => r.nombre))
     const pending = files.filter((f) => !done.has(f))
 
-    if (!pending.length) log('Database is up to date')
+    if (!pending.length) log('La base está al día')
+    else if (!tieneTablas) log(`Base vacía: aplicando las ${pending.length} migraciones`)
 
     for (const file of pending) {
-      log(`Applying ${file}`)
+      log(`Aplicando ${file}`)
       const sql = await readSql(path.join(MIGRATIONS_DIR, file))
       await client.query('BEGIN')
       inTransaction = true
@@ -193,7 +190,7 @@ export async function runMigrations(pool: Pool, log: (msg: string) => void = con
       inTransaction = false
     }
 
-    return { mode: 'incremental', applied: pending }
+    return { mode: tieneTablas ? 'incremental' : 'fresh', applied: pending }
   } catch (err) {
     if (inTransaction) await client.query('ROLLBACK').catch(() => undefined)
     throw err
