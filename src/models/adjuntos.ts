@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg'
 import type { UsuarioAutenticado } from '../middleware/auth'
 import { WhereBuilder, scopePermisos } from '../middleware/scope'
+import { adjuntos } from '../db/schema'
 
 /**
  * ============================================================================
@@ -11,20 +12,12 @@ import { WhereBuilder, scopePermisos } from '../middleware/scope'
  * ============================================================================
  */
 
-export interface Adjunto {
-  id: number
-  /** FK a permisos. ON DELETE CASCADE: borrar el permiso borra sus adjuntos. */
-  permiso_id: number
-  /** Nombre original del archivo, el que ve y descarga el usuario. */
-  nombre_archivo: string
-  /** Ruta del objeto en S3. Es la ubicación real del archivo. */
-  s3_key: string
-  content_type: string | null
-  size_bytes: number | null
-  /** cognito_sub de quien lo subió (no el id de usuarios). */
-  uploaded_by: string
-  created_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/adjuntos.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Adjunto = typeof adjuntos.$inferSelect
 
 /** Lo que agrega listAdjuntosPorPermiso sobre la tabla (join con usuarios). */
 export interface AdjuntoConUsuario extends Adjunto {

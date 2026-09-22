@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import { WhereBuilder } from '../middleware/scope'
+import { comites, permisosComite } from '../db/schema'
 
 /**
  * ============================================================================
@@ -11,40 +12,46 @@ import { WhereBuilder } from '../middleware/scope'
  */
 
 /** Columnas de la tabla base `comites`. */
-export interface Comite {
-  id: number
-  /** Número de sesión. UNIQUE: es como se la nombra ("comité 7"). */
-  numero: number
-  fecha: string
-  created_by: string | null
-  updated_by: string | null
-  created_at: string
-  updated_at: string
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/comites.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type Comite = typeof comites.$inferSelect
 
 /**
  * Columnas de `permisos_comite` (relación N:N permiso <-> sesión).
  *
- * Los *_snapshot congelan cómo estaba el permiso el día de esa sesión, para
- * poder reconstruir la tabla exacta que se presentó en el comité aunque el
- * permiso haya avanzado después.
+ * Es la sesión en la que el permiso ENTRÓ al seguimiento. Desde la migración
+ * 003 las vistas ya no usan los *_snapshot: cada permiso se muestra en las
+ * sesiones siguientes a la suya y todo se recalcula contra la fecha de la
+ * sesión que se mira. Las columnas quedan por si vuelve a hacer falta el dato
+ * congelado.
  */
-export interface PermisoComite {
-  id: number
-  permiso_id: number
-  comite_id: number
-  /** FK a `estados_permiso`: el estado congelado a la fecha de la sesión. */
-  estado_snapshot_id: number | null
-  dias_snapshot: number | null
-  compromiso: string | null
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/permisosComite.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type PermisoComite = typeof permisosComite.$inferSelect
 
-/** Una fila por sesión: lo que devuelve `v_resumen_comite`. */
+/**
+ * Una fila por sesión: lo que devuelve `v_resumen_comite`.
+ *
+ * IMPORTANTE, el conteo es ACUMULATIVO Y ESTRICTO (migración 003): la tabla
+ * del comité N son los permisos que entraron en comités con número MENOR a N,
+ * no los vinculados a N. Los que entraron en N aparecen desde N+1.
+ *
+ * El motivo: el Excel origen guarda un solo comité por permiso (el actual),
+ * así que contar "los de esta sesión" dejaba las sesiones nuevas en cero.
+ */
 export interface VResumenComite {
   comite_id: number
   comite_numero: number
   comite_fecha: string
+  /** Permisos de todos los comités anteriores a este. */
   permisos_en_agenda: number
+  /** De esos, los que ya estaban resueltos o descartados A LA FECHA de la sesión. */
   permisos_resueltos: number
   /** Promedio de días de tramitación a la fecha de la sesión. */
   promedio_dias: number | null
@@ -55,12 +62,18 @@ export interface VResumenComite {
  * models/permisos.ts) salvo que los cálculos van contra la fecha del comité
  * y no contra CURRENT_DATE. No trae `estado_es_final` ni `semaforo`, y agrega:
  *
- *   comite_id          number
- *   comite_numero      number
- *   comite_fecha       string
- *   compromiso         string | null   compromiso asumido en esa sesión
- *   estado_a_la_fecha  EstadoPermiso   snapshot guardado, o reconstruido
- *   dias_tramitacion   number | null   snapshot guardado, o recalculado
+ *   comite_id               number
+ *   comite_numero           number         la sesión que se está mirando
+ *   comite_fecha            string
+ *   comite_ingreso_numero   number         la sesión en la que entró el permiso
+ *                                          (siempre menor que comite_numero)
+ *   compromiso              string | null  compromiso asumido en esa sesión
+ *   estado_a_la_fecha       EstadoPermiso  estado que tenía ese día
+ *   finalizado_a_la_fecha   boolean        si ese día ya estaba resuelto/descartado
+ *   dias_tramitacion        number | null  días a la fecha de la sesión
+ *
+ * Un permiso aparece en TODAS las sesiones posteriores a la suya, con los
+ * cálculos rehechos a la fecha de cada una (ver VResumenComite arriba).
  */
 
 export async function listComites(db: Pool | PoolClient) {

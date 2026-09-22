@@ -1,22 +1,29 @@
 import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as cognito from 'aws-cdk-lib/aws-cognito'
+import type { EnvConfig } from '../config'
 
 export interface AuthStackProps extends cdk.StackProps {
-  stage: string
+  config: EnvConfig
 }
 
 /**
- * Cognito, on its own stack.
+ * ============================================================================
+ * COGNITO — quién puede entrar a la app, por ambiente
+ * ============================================================================
  *
- * Split out from the main stack for one practical reason: this is the only
- * piece that is free (50k monthly active users) and the only one needed to
- * develop and test the login. The main stack contains a NAT gateway (~US$32
- * a month, not free tier), so keeping auth separate means you can deploy
- * this alone, wire up sign-in, and only pay once the API actually goes up.
+ * Un User Pool por ambiente, con cuentas separadas: quien tiene cuenta en dev
+ * no la tiene en prod. Es deliberado, porque en prod van a entrar seremis y
+ * subsecretarios.
  *
- *   npx cdk deploy Oasi-Auth-dev -c stage=dev     # free
- *   npx cdk deploy Oasi-dev      -c stage=dev     # starts costing
+ * OJO: el pool de dev ya existía antes de esta infraestructura, con usuarios
+ * reales adentro, así que se reusa en vez de crearlo (ver `cognito` en
+ * config.ts). Este stack solo se despliega para los ambientes que NO traen
+ * ids en config.ts. Recrear un pool significa que todos pierden la cuenta y
+ * hay que volver a invitarlos.
+ *
+ * Cognito es gratis hasta 10.000 usuarios activos por mes.
+ * ============================================================================
  */
 export class AuthStack extends cdk.Stack {
   readonly userPool: cognito.UserPool
@@ -25,11 +32,13 @@ export class AuthStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props)
 
-    const isProd = props.stage === 'prod'
+    const { config } = props
+    const isProd = config.envName === 'prod'
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
-      userPoolName: `oasi-${props.stage}`,
-      // Internal system: an admin creates every account, never self-service.
+      userPoolName: `oasi-users-${config.envName}`,
+      // Sistema interno: las cuentas las crea un administrador desde la app,
+      // nadie se registra solo.
       selfSignUpEnabled: false,
       signInAliases: { email: true },
       autoVerify: { email: true },
@@ -45,29 +54,33 @@ export class AuthStack extends cdk.Stack {
         requireSymbols: true,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
-      // Default (Cognito) email sending is capped at 50 messages/day, which
-      // covers invitations and password resets for a ~20-person team without
-      // bringing SES into the picture.
+      // El correo lo manda Cognito. Tope: 50 mails por día, suficiente para
+      // invitaciones y recuperación de contraseña de un equipo chico. Para
+      // una carga grande de usuarios hay que pasar a SES.
       email: cognito.UserPoolEmail.withCognito(),
-      removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      // Borrar el pool borra todas las cuentas: en prod que sea una decisión
+      // de dos pasos, no un efecto secundario.
+      deletionProtection: isProd,
+      removalPolicy:
+        config.removalPolicy === 'retain' ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
     })
 
-    // One group per app role. The backend reads it from the JWT, but the
-    // `usuarios` table is authoritative because that is where the scope
-    // (which company / agency / region) lives.
+    // Un grupo por rol de la app. El backend igual considera autoritaria la
+    // tabla `usuarios`, porque ahí vive el alcance (qué empresa, qué
+    // organismo, qué región) y un rol sin su alcance no se puede aplicar.
     for (const rol of ['admin', 'oasi', 'organismo', 'empresa', 'region']) {
       new cognito.CfnUserPoolGroup(this, `Group-${rol}`, {
         userPoolId: this.userPool.userPoolId,
         groupName: rol,
-        description: `OASI role: ${rol}`,
+        description: `Rol OASI: ${rol}`,
       })
     }
 
     this.userPoolClient = this.userPool.addClient('WebClient', {
-      userPoolClientName: `oasi-${props.stage}-web`,
-      // SRP: the password never travels, the browser proves it knows it.
+      userPoolClientName: `oasi-${config.envName}-web`,
+      // SRP: la contraseña nunca viaja, el navegador prueba que la conoce.
       authFlows: { userSrp: true },
-      // SPA: no client secret, a browser cannot keep one.
+      // Aplicación web: sin client secret, un navegador no puede guardarlo.
       generateSecret: false,
       accessTokenValidity: cdk.Duration.hours(8),
       idTokenValidity: cdk.Duration.hours(8),
@@ -78,16 +91,10 @@ export class AuthStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'UserPoolId', {
       value: this.userPool.userPoolId,
       description: 'VITE_COGNITO_USER_POOL_ID',
-      exportName: `Oasi-${props.stage}-UserPoolId`,
     })
     new cdk.CfnOutput(this, 'UserPoolClientId', {
       value: this.userPoolClient.userPoolClientId,
       description: 'VITE_COGNITO_CLIENT_ID',
-      exportName: `Oasi-${props.stage}-UserPoolClientId`,
-    })
-    new cdk.CfnOutput(this, 'Region', {
-      value: this.region,
-      description: 'VITE_COGNITO_REGION',
     })
   }
 }

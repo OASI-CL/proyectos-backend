@@ -1,7 +1,7 @@
 // ============================================================================
 // Tipos compartidos front/back — OASI
 //
-// Reflejan exactamente el schema de db/schema.sql y lo que devuelven las
+// Reflejan exactamente el modelo de src/db/schema/ y lo que devuelven las
 // vistas. Frontend y backend son repos separados: este archivo está duplicado
 // en los dos (proyectos-backend/src/shared/types.ts y
 // proyectos-frontend/src/shared/types.ts). Si se edita, hay que actualizar

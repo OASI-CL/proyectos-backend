@@ -1,0 +1,131 @@
+name: Deploy prod
+
+# Rama main -> ambiente prod.
+#
+# Igual que deploy-dev.yml, con una diferencia: el job de deploy usa el
+# GitHub Environment `prod`, que tiene una regla de "required reviewers".
+# El workflow queda EN ESPERA hasta que alguien aprueba desde GitHub; recién
+# ahí toca AWS. Esa aprobación es la puerta entre develop y producción.
+#
+# Configuración inicial (Environments, secretos, reglas de rama): infra/README.md
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  ENVIRONMENT: prod
+
+jobs:
+  check:
+    name: Revisar
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            infra/package-lock.json
+
+      - name: Instalar
+        run: |
+          npm ci
+          npm ci --prefix infra
+
+      - name: Typecheck (API e infraestructura)
+        run: |
+          npm run build
+          npm --prefix infra run build
+
+      - name: Construir y probar el paquete de Lambda
+        run: |
+          npm run build:lambda
+          npm run test:lambda
+
+      - name: Sintetizar CloudFormation
+        working-directory: infra
+        run: npx cdk synth --context env=prod --quiet
+
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: dist-lambda-prod
+          path: dist-lambda
+          include-hidden-files: true
+          retention-days: 7
+
+  deploy:
+    name: Desplegar prod (requiere aprobación)
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            infra/package-lock.json
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist-lambda-prod
+          path: dist-lambda
+
+      - run: |
+          npm ci
+          npm ci --prefix infra
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: cdk deploy
+        working-directory: infra
+        run: |
+          npx cdk deploy --all \
+            --context env=${{ env.ENVIRONMENT }} \
+            --require-approval never \
+            --outputs-file outputs.json
+
+      - name: Migraciones
+        run: |
+          MODE="$(npx tsx -e "import {CONFIG} from './infra/config'; process.stdout.write(CONFIG.${{ env.ENVIRONMENT }}.database.mode)")"
+          echo "database.mode = $MODE"
+          if [ "$MODE" = "local" ]; then
+            echo "Base local: no hay migraciones que correr en AWS."
+          else
+            npm run db:migrate -- --env=${{ env.ENVIRONMENT }}
+          fi
+
+      - name: Verificar que la API llegue a la base
+        run: |
+          API_URL="$(jq -r --arg s "Oasi-Api-${{ env.ENVIRONMENT }}" '.[$s].ApiUrl' infra/outputs.json)"
+          API_URL="${API_URL%/}"   # la URL puede venir con o sin barra final
+          echo "API: ${API_URL}"
+          for intento in 1 2 3 4 5; do
+            if curl -fsS "${API_URL}/health/db"; then echo; exit 0; fi
+            echo " (intento ${intento} falló, reintentando)"; sleep 10
+          done
+          echo "::error::${API_URL}/health/db nunca respondió OK"
+          exit 1

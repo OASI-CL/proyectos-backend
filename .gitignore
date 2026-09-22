@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist-lambda es la unica carpeta de build (ver scripts/build-lambda.sh)
 dist-lambda/
 .env
 *.log
@@ -17,3 +17,6 @@ infra/node_modules/
 infra/cdk.out/
 infra/*.js
 infra/*.d.ts
+
+# written by `cdk deploy --outputs-file` in CI
+infra/outputs*.json

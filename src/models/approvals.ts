@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg'
 import type { UsuarioAutenticado } from '../middleware/auth'
 import { WhereBuilder, puedeAprobar } from '../middleware/scope'
 import type { EntidadSolicitud, EstadoSolicitud, TipoSolicitud } from '../shared/types'
+import { solicitudesCambio } from '../db/schema'
 
 /**
  * ============================================================================
@@ -12,29 +13,12 @@ import type { EntidadSolicitud, EstadoSolicitud, TipoSolicitud } from '../shared
  */
 
 /** Columnas de la tabla base `solicitudes_cambio`. */
-export interface SolicitudCambio {
-  id: number
-  entidad: EntidadSolicitud
-  /** Id del proyecto o del permiso. No es FK: apunta a una tabla u otra. */
-  entidad_id: number
-  /**
-   * 'creacion' -> la fila ya existe con estado_validacion='en_revision';
-   *               aprobar la pasa a 'validado' y `cambios` va vacío.
-   * 'edicion'  -> `cambios` trae los valores propuestos.
-   */
-  tipo: TipoSolicitud
-  cambios: Record<string, unknown>
-  estado: EstadoSolicitud
-  /** Comentario de quien la envió. */
-  comentario: string | null
-  /** cognito_sub de quien la envió. */
-  solicitado_por: string
-  solicitado_at: string
-  revisado_por: string | null
-  revisado_at: string | null
-  /** Comentario de quien la aprobó o rechazó. */
-  comentario_revision: string | null
-}
+/**
+ * Las columnas de la tabla salen del modelo (`src/db/schema/solicitudesCambio.ts`), que es
+ * la única fuente de verdad: no se repiten acá para que no puedan quedar
+ * desincronizadas.
+ */
+export type SolicitudCambio = typeof solicitudesCambio.$inferSelect
 
 /**
  * Columnas que AGREGA la vista `v_solicitudes_cambio`: el contexto que

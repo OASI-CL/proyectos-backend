@@ -2,6 +2,7 @@ import express from 'express'
 import type { Request, Response, NextFunction } from 'express'
 import cors from 'cors'
 
+import { pool } from './db/client'
 import { requireAuth } from './middleware/auth'
 import dashboardRouter from './routes/dashboard'
 import proyectosRouter from './routes/proyectos'
@@ -16,10 +17,19 @@ import usuariosRouter from './routes/usuarios'
 
 const app = express()
 
-// En producción hay que restringir el origen al dominio de Amplify,
-// no dejarlo abierto (ver README).
+// CORS_ORIGIN is a comma-separated list of browser origins allowed to call the
+// API (on AWS it comes from infra/lib/config.ts). Left empty, local
+// development accepts any origin, but a deployed API accepts none: an unset
+// value must never silently mean "open".
+const allowedOrigins = (process.env.CORS_ORIGIN ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+const isDeployed = process.env.NODE_ENV === 'production'
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || true,
+  origin: allowedOrigins.length ? allowedOrigins : !isDeployed,
   allowedHeaders: [
     'Content-Type',
     'Authorization',
@@ -36,6 +46,18 @@ app.use(express.json())
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', authMode: process.env.AUTH_MODE ?? 'dev' })
+})
+
+// Proves the whole path works — Lambda to Secrets Manager to Postgres — not
+// just that Express started. CI calls it right after every deploy.
+app.get('/health/db', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1')
+    res.json({ status: 'ok', database: 'reachable' })
+  } catch (err) {
+    console.error('[health/db]', err)
+    res.status(503).json({ status: 'error', database: 'unreachable' })
+  }
 })
 
 // Devuelve quién soy, según el token (o el usuario falso en modo dev).

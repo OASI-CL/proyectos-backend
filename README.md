@@ -15,7 +15,9 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 ## Estado actual
 
 ✅ Hecho:
-- `db/schema.sql` — schema completo: tablas, triggers de auditoría, vistas
+- `src/db/schema/` — **el modelo de datos**: un archivo por tabla, con sus
+  columnas, claves foráneas e índices. Las migraciones y los tipos de
+  TypeScript se generan desde ahí
 - `db/seed.py` — carga el Excel origen a Postgres, probado con datos reales
   (317 proyectos, 1.552 permisos, 12 ministerios, 19 organismos)
 - Todas las rutas de la API (ver "Endpoints" abajo)
@@ -31,17 +33,22 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
   alta/edición/baja de usuarios desde la propia app
   (`src/services/cognitoUsers.ts`, `src/routes/usuarios.ts`) — no hace falta
   la consola de AWS salvo para crear el primer admin
-- `infra/` — stacks de CDK para desplegar todo (ver "Deploy" abajo)
+- `infra/` — infraestructura en CDK, con la configuración de los dos ambientes
+  en un solo archivo (`infra/config.ts`). Ver "Deploy" abajo y
+  [`infra/README.md`](infra/README.md)
+- CI/CD por rama: `develop` → dev, `main` → prod (con aprobación manual)
+
+- **dev desplegado y funcionando** en AWS, con los datos cargados. La API de
+  dev es `https://39dg0v2j8j.execute-api.us-east-1.amazonaws.com/dev`
 
 🚧 Pendiente:
-- Desplegar el `OasiStack` (RDS + Lambda + API Gateway + S3) en la cuenta
-  real — hoy solo está desplegado `Oasi-Auth-dev` (Cognito, gratis). Ver
-  `infra/COGNITO_SETUP.md` y `DEPLOYMENT.md`.
-- Generar un build real de `dist-lambda/` (`npm run build:lambda`) antes de
-  ese deploy — el que hay en el repo hoy es un placeholder de una prueba de
-  `cdk synth`, no un bundle real.
-- Amplify Hosting para el frontend.
-- No hay tests automatizados.
+- Crear prod: pasa con el primer merge a `main` (su base ya existe, vacía).
+- Conectar las dos apps de Amplify (se hace por consola, una vez).
+- Crear los Environments `dev` y `prod` en GitHub con su secreto, para que el
+  CI pueda desplegar.
+- No hay tests automatizados de lógica de negocio: el CI verifica typecheck,
+  que el paquete de la Lambda funcione y que la API desplegada llegue a su
+  base de datos.
 - `src/routes/catalogos.ts` (español) y `src/routes/catalog.ts` (inglés)
   siguen coexistiendo — comparten el SQL vía `src/models/catalog.ts`, pero el
   primero solo se saca cuando el frontend termine de migrar a `/catalog`.
@@ -55,7 +62,7 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 | Runtime | Node.js 24 (LTS) + TypeScript |
 | Framework HTTP | Express 5 |
 | Deploy | AWS Lambda + API Gateway, vía `serverless-http` |
-| Base de datos | PostgreSQL (RDS t3.micro en prod, local para desarrollo) |
+| Base de datos | PostgreSQL (RDS `db.t4g.micro` en AWS, local para desarrollo) |
 | Cliente DB | `pg` (pool de conexiones). **No** se usa RDS Data API. |
 | Auth | AWS Cognito (JWT verificado con `aws-jwt-verify`) |
 | Adjuntos | S3 (`@aws-sdk/client-s3` + presigned URLs) |
@@ -77,6 +84,8 @@ proyectos-backend/
     middleware/
       auth.ts              verifica JWT contra JWKS de Cognito (o usuario falso en AUTH_MODE=dev)
       scope.ts             WhereBuilder + filtro por rol (empresa/organismo/región) para queries parametrizadas
+      schema/               EL MODELO DE DATOS: un archivo por tabla, con columnas,
+                            claves foráneas e índices. Fuente de verdad de todo
     models/                 todo el SQL de la app — nada de SQL vive en routes/
       proyectos.ts          queries de proyectos (lista, detalle, alta, permisos del proyecto)
       permisos.ts            queries de permisos (lista, detalle, edición, historial)
@@ -97,22 +106,51 @@ proyectos-backend/
     shared/
       types.ts               tipos compartidos con el frontend (ver nota abajo)
   db/
-    schema.sql              schema completo de Postgres (tablas + vistas)
-    migrations/               cambios incrementales sobre una BD ya sembrada (idempotentes)
+    migrations/             generadas desde src/db/schema/, más las escritas a
+                            mano para lo que un modelo no expresa (vistas,
+                            triggers, datos de catálogos)
     seed.py                  carga el Excel origen -> Postgres
-  infra/                    CDK: AuthStack (Cognito, gratis) + OasiStack (VPC/RDS/Lambda/API GW/S3)
+  infra/                    infraestructura en CDK (ver infra/README.md)
+    config.ts                 TODA la configuración de los ambientes, en un archivo
+    bin/app.ts                qué stacks existen
+    lib/                      network / database / auth / storage / api
+  scripts/
+    db.ts                     todos los comandos de base de datos (npm run db:*)
+    load-data.sh              carga inicial de datos históricos
+    create-admin.sh           primer admin de un ambiente
+    amplify-env.sh            apunta una rama de Amplify a su ambiente
+    build-lambda.sh           arma dist-lambda/
+    smoke-lambda.cjs          prueba dist-lambda/ antes de desplegarlo
   data/                     (no versionado) acá va el Excel origen, ver abajo
   .venv/                    (no versionado) entorno virtual Python para seed.py
 ```
 
-**Por qué `models/` y no un ORM:** las instrucciones del proyecto piden SQL
-crudo parametrizado, no un ORM — pero eso no significa que el SQL tenga que
-vivir mezclado con el parseo del request adentro de cada archivo de `routes/`.
-`models/` es esa separación: cada función recibe lo que necesita (un
-`WhereBuilder` ya armado por la ruta con el scope del usuario, un `pool` o
-`client` de Postgres, algún parámetro) y devuelve filas — no conoce Express,
-no arma respuestas HTTP, no decide códigos de estado. Las rutas quedan
-livianas: piden el request, chequean permiso, llaman al modelo, responden.
+### Dónde vive qué: `schema/` vs `models/`
+
+Son dos cosas distintas y conviene no confundirlas:
+
+| | `src/db/schema/` | `src/models/` |
+|---|---|---|
+| Qué es | **la estructura**: qué tablas hay, qué columnas, qué claves foráneas | **las consultas**: cómo se leen y escriben esos datos |
+| Quién lo usa | drizzle-kit, para generar las migraciones y los tipos | las rutas de la API |
+| Si lo cambiás | hay que generar una migración (`npm run db:generate`) | no toca la base |
+
+Los tipos de TypeScript de cada tabla **salen del modelo**
+(`typeof proyectos.$inferSelect`), no se escriben a mano en `models/`: así no
+pueden quedar desincronizados con la base.
+
+**Por qué las consultas siguen siendo SQL y no el ORM:** Drizzle se usa para
+el modelo y las migraciones. Las consultas siguen en SQL parametrizado porque
+las 8 vistas y las agregaciones del dashboard se expresan mucho mejor en SQL
+que en cualquier ORM. Pasarlas a la API de Drizzle es opcional y se puede
+hacer de a poco, entidad por entidad.
+
+Lo que sí se respeta siempre: **el SQL no vive mezclado con el parseo del
+request**. Cada función de `models/` recibe lo que necesita (un
+`WhereBuilder` ya armado por la ruta con el alcance del usuario, un `pool` o
+`client`, algún parámetro) y devuelve filas — no conoce Express, no arma
+respuestas HTTP, no decide códigos de estado. Las rutas quedan livianas:
+parsean el request, chequean permiso, llaman al modelo, responden.
 
 **Sobre `src/shared/types.ts`:** este backend y el frontend son dos repos
 separados, así que no hay una carpeta compartida real entre ambos. Este
@@ -173,25 +211,30 @@ partir de los headers `x-dev-rol`, `x-dev-empresa-id` y `x-dev-organismo-id`
 `S3_BUCKET_ADJUNTOS` y `AWS_REGION` solo se necesitan para los adjuntos; sin
 ellos esas rutas responden 503 y el resto de la API funciona igual.
 
-### 5. Aplicar el schema
-
-Base nueva, desde cero (deja los catálogos ya cargados):
+### 5. Crear las tablas
 
 ```bash
-psql -h 127.0.0.1 -U postgres -d oasi_dev -f db/schema.sql
+npm run db:migrate -- --env=local
 ```
 
-Base que **ya tenía datos** cargados con el modelo anterior (región, sector,
-etapa y estado como texto): hay que correr la migración que los pasa a
-catálogos con id.
+Sobre la base del `.env`:
 
-```bash
-psql -h 127.0.0.1 -U postgres -d oasi_dev -f db/migrations/002_catalogos.sql
-```
+- **vacía** → corre todas las migraciones en orden y queda lista, con los
+  catálogos cargados
+- **con historial** → aplica solo las que faltan, cada una en su propia
+  transacción
+- **con tablas pero sin historial** → se detiene y te pide declarar hasta
+  dónde está al día con `npm run db:baseline`. No adivina: marcar como
+  aplicada una migración que en realidad no corrió deja la base vieja en
+  silencio
 
-Es idempotente (se puede correr dos veces), va toda en una transacción, y si
-encuentra un valor de texto que no calza con el catálogo **falla a propósito**
-nombrándolo, en vez de dejarlo en NULL sin avisar.
+Lo aplicado queda en la tabla `_migrations`. Es el mismo código que corre en
+AWS después de cada deploy (`src/db/migrate.ts`).
+
+**Para cambiar el modelo de datos:** se edita el archivo de la tabla en
+`src/db/schema/`, se corre `npm run db:generate` (escribe la migración sola) y
+después `npm run db:migrate -- --env=local`. Detalle en
+[`infra/README.md`](infra/README.md) → "Migraciones de base de datos".
 
 ### 6. Cargar los datos del Excel (opcional, para tener datos reales)
 
@@ -240,12 +283,28 @@ curl http://localhost:3001/health
 | Comando | Qué hace |
 |---|---|
 | `npm run dev` | Levanta `src/app.local.ts` con `tsx watch` (recarga en caliente) |
-| `npm run build` | Compila TypeScript a `dist/` (`tsc`) |
-| `npm start` | Corre el build compilado (`node dist/handler.js`) — para probar sin Lambda |
-| `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción, listo para subir a Lambda |
-| `npm run migrate` | Aplica las migraciones de `db/migrations/` contra la BD apuntada en `.env` |
+| `npm run check` | **Antes de subir.** Lo mismo que corre el CI: typecheck de API e infra, build del paquete de Lambda y smoke test de ese paquete |
+| `npm run db:migrate -- --env=local` | Aplica las migraciones pendientes a la BD del `.env` |
+| `npm run db:migrate -- --env=dev` | Idem contra la base de dev en AWS (vía la Lambda `db-ops`) |
+| `npm run db:bootstrap` | Crea las bases y los usuarios de cada ambiente en el servidor RDS (una vez) |
+| `npm run db:generate` | **Después de editar un modelo:** escribe sola la migración con el cambio |
+| `npm run db:generate:custom` | Crea una migración vacía para SQL a mano (vistas, triggers, catálogos) |
+| `npm run db:baseline -- --env=... --hasta=...` | Declara que una base ya está al día hasta cierta migración (sin ejecutarla) |
+| `npm run build` | Revisa los tipos, sin generar archivos (`tsc --noEmit`) |
+| `npm start` | Corre el build compilado localmente (`dist-lambda/src/app.local.js`) |
+| `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
+| `npm run test:lambda` | Prueba ese paquete desde una copia fuera del repo (detecta dependencias faltantes, rutas rotas, CORS abierto) |
 | `npm run infra:diff` | `cd infra && cdk diff` — qué cambiaría un deploy sin aplicarlo |
-| `npm run infra:deploy` | `cd infra && cdk deploy` |
+
+Scripts para operar un ambiente desplegado (usan tu `AWS_PROFILE`):
+
+| Comando | Qué hace |
+|---|---|
+| `npm run db:status -- --env=dev` | Migraciones aplicadas y cantidad de filas |
+| `npm run db:check -- --env=dev` | Comprueba que las credenciales de un ambiente no abran la base del otro |
+| `scripts/load-data.sh dev` | Carga única de los datos desde tu base local; se niega si ya hay proyectos |
+| `scripts/create-admin.sh dev <email> "<nombre>"` | Primer admin de un ambiente (cuenta en Cognito + fila en `usuarios`) |
+| `scripts/amplify-env.sh <app-id> develop dev` | Apunta una rama de Amplify a su ambiente |
 
 ---
 
@@ -319,12 +378,12 @@ una columna aparte, `id_excel` (ej. `'P183'`, `'PM1377'`), que es solo
 informativo — nunca se usa como foreign key. Los proyectos/permisos creados
 desde la app tienen `id_excel = NULL`.
 
-### Catálogos (vocabulario controlado, con datos semilla en `schema.sql`)
+### Catálogos (vocabulario controlado, cargados por las migraciones)
 
-Todo lo que es una lista cerrada es una tabla con id, no texto libre. Van con
-los datos incluidos en `db/schema.sql` y con **id explícito y estable**, así
-`region_id = 3` significa lo mismo en tu base local, en dev y en producción.
-No dependen del Excel: se cargan junto con el schema.
+Todo lo que es una lista cerrada es una tabla con id, no texto libre. Sus
+datos van en una migración, con **id explícito y estable**, así `region_id = 3`
+significa lo mismo en tu base local, en dev y en producción. No dependen del
+Excel: se cargan al crear la base.
 
 | Tabla | Contenido |
 |---|---|
@@ -352,8 +411,8 @@ dos, y normalizar los catálogos no rompió el frontend.
 |---|---|
 | `v_permisos` | Permiso + proyecto + organismo + catálogos resueltos, con `dias_tramitacion`, `menos_3_meses`, `entre_3_y_6_meses`, `supera_6_meses`, `semaforo`, calculados contra `CURRENT_DATE` |
 | `v_proyectos` | Proyecto + catálogos + `total_permisos`, `permisos_pendientes`, `permisos_6meses`, `criticos_pendientes`, `sin_pendientes` |
-| `v_permisos_comite` | Igual que `v_permisos` pero calculado a la fecha del comité (`c.fecha`), no de hoy — reconstruye la tabla exacta presentada en cada sesión |
-| `v_resumen_comite` | Una fila por sesión: permisos en agenda, resueltos, promedio de días |
+| `v_permisos_comite` | Los permisos de cada sesión de comité, calculados a la fecha de esa sesión. **Acumulativo y estricto**: la tabla del comité N son los permisos que entraron en comités *anteriores* a N |
+| `v_resumen_comite` | Una fila por sesión: permisos en agenda, resueltos a esa fecha, promedio de días |
 | `v_resumen_organismo` | Por organismo: pendientes, +6 meses, promedio de días, inversión bloqueada |
 | `v_usuarios` | Usuario con su alcance resuelto a nombres (empresa / organismo / región) |
 | `v_historial` | Historial de cambios con nombre de usuario legible (join con `usuarios`) |
@@ -361,11 +420,16 @@ dos, y normalizar los catálogos no rompió el frontend.
 
 ### Dónde ver qué columnas tiene cada entidad
 
-Cada archivo de `src/models/` arranca con la lista completa de columnas de su
-entidad, en dos interfaces: las de la tabla base y las que **agrega la vista**
-encima (catálogos resueltos y valores derivados), con el comentario de cada
-campo cuando el dato tiene alguna trampa. Están verificadas contra la base, no
-escritas de memoria. Es el lugar para mirar antes de agregar un endpoint.
+**En `src/db/schema/`**, un archivo por tabla. Ahí está la lista completa de
+columnas con su tipo, sus claves foráneas, sus índices y un comentario en cada
+campo que tiene alguna trampa. Es lo que la base realmente tiene: no es una
+copia que pueda quedar vieja, porque de ahí salen las migraciones.
+
+Las **vistas** agregan columnas encima (catálogos resueltos y valores
+calculados). Esas sí están descritas a mano, en el archivo correspondiente de
+`src/models/` — son resultados de consulta, no tablas.
+
+Es el lugar para mirar antes de agregar un endpoint.
 
 ### Auditoría
 
@@ -395,39 +459,68 @@ resumen:
 
 ## Deploy
 
-Infra como código en `infra/` (CDK, TypeScript), dos stacks separados para
-poder probar el login sin pagar el resto:
+**Guía completa: [`infra/README.md`](infra/README.md).** Resumen:
 
-- **`Oasi-Auth-dev`** (`infra/lib/auth-stack.ts`) — solo Cognito: User Pool +
-  5 grupos + app client. Gratis (Cognito es gratis hasta 50.000 usuarios
-  activos/mes). Guía completa: `infra/COGNITO_SETUP.md`.
-- **`Oasi-<stage>`** (`infra/lib/oasi-stack.ts`) — todo lo demás: VPC (1 NAT
-  gateway, no uno por AZ, para no duplicar el costo), RDS Postgres t3.micro,
-  Lambda (con `dist-lambda/` como código), API Gateway, bucket S3 de
-  adjuntos. Recibe el `userPool`/`userPoolClient` del stack anterior.
+### Dos ambientes, uno por rama
 
-Dos carpetas de build distintas, no confundir:
+| | dev | prod |
+|---|---|---|
+| Rama (en los dos repos) | `develop` | `main` |
+| Qué pasa al hacer push | CI → deploy dev → migraciones → chequeo de salud | CI → **aprobación** → deploy prod → migraciones → chequeo de salud |
+| Base de datos | base `oasi_dev` con usuario propio | base `oasi_prod` con usuario propio |
+| Usuarios | pool Cognito propio | pool Cognito propio (cuentas separadas) |
+| Costo | los dos juntos, ~US$24/mes | |
 
-- `dist/` — salida plana de `tsc` (`npm run build`), la usa `npm start` y el
-  desarrollo local.
-- `dist-lambda/` — lo que sube a Lambda: `dist/` **más** los `node_modules`
-  de producción empaquetados juntos en una sola carpeta. Lo genera
-  `npm run build:lambda` (`scripts/build-lambda.sh`). Hay que regenerarlo
-  antes de cada deploy real del `OasiStack`.
+Dev y prod comparten la red y el **servidor** de base de datos (es lo que hace
+que dev salga casi gratis), pero cada uno tiene su propia base, su propio
+usuario de Postgres, su propio secreto y su propia Lambda. Las credenciales de
+dev no pueden abrir la base de prod.
 
-Pasos generales (detalle completo en `DEPLOYMENT.md`):
+La configuración de cada ambiente está en **un solo archivo**:
+[`infra/config.ts`](infra/config.ts).
 
-1. `cd infra && npx cdk deploy Oasi-Auth-dev -c stage=dev` — despliega Cognito.
-2. Crear el primer admin a mano (única vez que hace falta AWS CLI, ver
-   `infra/COGNITO_SETUP.md`) — desde ahí, el resto de los usuarios se crea
-   desde **Administración → Usuarios** en la propia app.
-3. `npm run build:lambda` en `proyectos-backend/`.
-4. `cd infra && npx cdk deploy Oasi-dev -c stage=dev` — despliega RDS, Lambda,
-   API Gateway y S3 (este paso sí genera costo, principalmente el NAT
-   gateway, ~US$32/mes).
-5. Aplicar `db/schema.sql` contra la RDS recién creada.
-6. Configurar el frontend (Amplify Hosting) con la URL de la API y los
-   valores de Cognito.
+### El día a día
+
+1. Cambiás código y probás en local (`npm run dev`, `npm run db:migrate -- --env=local`).
+2. **`npm run check`** — corre lo mismo que el CI. Si pasa acá, pasa allá.
+3. Push a `develop` → GitHub Actions despliega a dev, aplica migraciones y
+   verifica que la API llegue a la base.
+4. Probás en el sitio de dev (o con tu frontend local contra dev:
+   `npm run dev:aws` en `proyectos-frontend`).
+5. Pull request `develop → main`, merge, aprobás el deploy → prod.
+
+### Stacks de CDK (`infra/`)
+
+Compartidos por los dos ambientes:
+
+- **`Oasi-Account`** — una vez por cuenta: permite a GitHub desplegar sin
+  guardar claves de AWS (OIDC), un rol por ambiente, y la alerta de presupuesto.
+- **`Oasi-Network`** — VPC y la salida a internet (NAT instance, ~US$7/mes,
+  en vez del NAT Gateway de ~US$32).
+- **`Oasi-Database`** — el servidor Postgres con una base aislada por ambiente.
+
+Por ambiente:
+
+- **`Oasi-Auth-<env>`** — Cognito (dev reusa el pool que ya existía).
+- **`Oasi-Storage-<env>`** — bucket de adjuntos.
+- **`Oasi-Api-<env>`** — Lambda de la API, HTTP API y Lambda `db-ops`.
+
+La base no tiene ninguna salida a internet. Para migrarla o cargarle datos no
+se usan túneles: la Lambda `db-ops` corre adentro de la red y se invoca con
+los scripts de `scripts/` o desde el CI.
+
+### `dist-lambda/`: la única carpeta de build
+
+No está en git (la genera `npm run build:lambda` y la prueba
+`npm run test:lambda`; en AWS la construye el CI). Es lo que se sube a Lambda,
+y tiene tres cosas:
+
+- el código compilado a JavaScript;
+- `node_modules` solo con dependencias de producción, porque el código
+  compilado sigue haciendo `require('express')`, `require('pg')`...;
+- una copia de `db/*.sql`, porque la Lambda que migra la base los lee en
+  tiempo de ejecución. Es la única copia y vive dentro del build, no en el
+  repo.
 
 `AUTH_MODE` decide cómo se autentica cada request:
 
@@ -459,3 +552,6 @@ Pasos generales (detalle completo en `DEPLOYMENT.md`):
   los strings de cara al usuario se quedan en español
 - El `sub` y los grupos de Cognito salen de `req.user`, poblado por
   `middleware/auth.ts`
+
+
+

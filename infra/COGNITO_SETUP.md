@@ -1,212 +1,125 @@
-# Cognito setup
+# Cognito: login y usuarios
 
-Step-by-step to get login working. **Nothing here costs money**: Cognito is
-free up to 50,000 monthly active users, and this stack deliberately leaves out
-everything that is not (see "What this does NOT create" at the end).
+Cómo funciona el ingreso a la app y cómo se administran las cuentas.
+Para desplegar infraestructura, ver [`README.md`](README.md).
 
----
-
-## 0. AWS credentials (first time only)
-
-`cdk bootstrap` failing with *"Unable to resolve AWS account to use"* means the
-CLI has no credentials yet, or `AWS_PROFILE` is not exported in that shell.
-
-Install the CLI:
-
-```bash
-curl -sS "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o awscliv2.zip
-unzip -q awscliv2.zip && sudo ./aws/install --update && rm -rf awscliv2.zip aws
-```
-
-Then create a dedicated IAM user and configure the CLI with its keys:
-
-1. Console → **IAM** → **Users** → **Create user**, name it `oasi-deploy`.
-2. **Attach policies directly** → `AdministratorAccess`. (Worth narrowing
-   later to just what CDK touches; fine to start here.)
-3. Open the user → **Security credentials** → **Create access key** →
-   **Command Line Interface (CLI)**. The secret is shown **once**.
-
-```bash
-aws configure --profile oasi   # region us-east-1, output json
-export AWS_PROFILE=oasi
-aws sts get-caller-identity    # confirms it works
-```
-
-> **Never create access keys on the root user.** They cannot be scoped and
-> cannot be rotated without disruption — that is the whole reason for the
-> separate `oasi-deploy` user.
->
-> `~/.aws/credentials` now holds a long-lived secret in plain text. Keep it
-> off shared machines, and delete the key in IAM when it is no longer needed.
-> The more robust alternative is IAM Identity Center (`aws configure sso`),
-> where credentials expire on their own.
+Cognito es **gratis** hasta 10.000 usuarios activos por mes.
 
 ---
 
-## 1. Deploy the auth stack
+## Un pool por ambiente
 
-```bash
-cd proyectos-backend/infra
-npm ci
+| Ambiente | User Pool | Quién lo maneja |
+|---|---|---|
+| dev | `oasi-dev` (`us-east-1_WDLIW3Jby`) | ya existía; se **reusa**, no lo toca el CDK |
+| prod | `oasi-users-prod` | lo crea el stack `Oasi-Auth-prod` |
 
-export AWS_PROFILE=oasi
+Las cuentas **no se comparten** entre ambientes: quien entra a dev no entra a
+prod. Es a propósito, porque en prod van a entrar seremis y subsecretarios.
 
-# Once per account+region
-npx cdk bootstrap
+El pool de dev se reusa porque ya tiene usuarios reales adentro y recrearlo
+significaría que todos pierden la cuenta. Sus ids están en
+[`config.ts`](config.ts) → `CONFIG.dev.cognito`. Cuando un ambiente trae ids
+ahí, el CDK no crea ningún pool.
 
-# Cognito only
-npx cdk deploy Oasi-Auth-dev -c stage=dev
-```
-
-It prints three values:
-
-```
-Oasi-Auth-dev.UserPoolId        us-east-1_XXXXXXXXX
-Oasi-Auth-dev.UserPoolClientId  xxxxxxxxxxxxxxxxxxxxxxxxxx
-Oasi-Auth-dev.Region            us-east-1
-```
-
-These are **not secrets** — they ship inside the frontend bundle by design.
-Safe to paste into chat, a ticket, or a config file.
-
-> Prefer the console? Create a user pool with: email sign-in, self-registration
-> **off**, a 12-character password policy, an app client **without** a client
-> secret and SRP auth enabled, and five groups named exactly `admin`, `oasi`,
-> `organismo`, `empresa`, `region`. The CDK stack does all of that.
+Cada pool tiene cinco grupos, uno por rol: `admin`, `oasi`, `organismo`,
+`empresa`, `region`. El grupo es solo una pista: **la tabla `usuarios` es la
+que manda**, porque ahí vive el alcance (qué empresa, qué organismo, qué
+región), y un rol sin su alcance no se puede aplicar. Si falta, el backend
+rechaza el ingreso en vez de mostrar todo.
 
 ---
 
-## 2. Point the frontend at it
+## Cómo se autentica cada request
 
-Local (`proyectos-frontend/.env`):
+`AUTH_MODE` decide el modo:
+
+| | `AUTH_MODE=dev` | `AUTH_MODE=cognito` |
+|---|---|---|
+| Dónde | solo en tu PC | siempre en AWS (lo fija el CDK) |
+| Valida el token | no | sí, contra el JWKS del pool |
+| De dónde sale el rol | headers `x-dev-*` (selector en la barra superior) | del token |
+
+**`AUTH_MODE=dev` en un ambiente desplegado dejaría que cualquiera eligiera su
+propio rol con un header HTTP.** Por eso el CDK lo fija en `cognito` y no es
+configurable.
+
+---
+
+## Variables del frontend
+
+El sitio necesita saber a qué pool hablarle. Son públicas por diseño (viajan
+dentro del bundle del navegador):
 
 ```
-VITE_API_URL=http://localhost:3001
+VITE_API_URL=<URL del HTTP API del ambiente>
 VITE_COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
 VITE_COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
 VITE_COGNITO_REGION=us-east-1
 ```
 
-In Amplify Hosting: the same four, under App settings → Environment variables.
+- **En Amplify**: se configuran por rama, y no a mano:
+  `scripts/amplify-env.sh <app-id> develop dev` las lee de lo que ya está
+  desplegado y las escribe.
+- **En tu PC**: en `.env` (vacías, para usar el selector de rol) o en
+  `.env.aws` (con los valores de dev, para `npm run dev:aws`).
 
-These are read at **build time** (Vite inlines them), so changing one means
-rebuilding — `npm run dev` restart locally, redeploy on Amplify.
+Vite las incrusta al compilar, así que cambiar una exige un build nuevo.
 
-The app decides its mode from these variables:
-
-| | Login screen | Role comes from |
-|---|---|---|
-| Variables empty | no | the dev switcher in the top bar |
-| Variables set | **yes** | the Cognito JWT |
-
-So leaving them out of your local `.env` keeps development exactly as it is
-today.
+Si las variables están vacías, el frontend no muestra login: usa el selector
+de rol contra un backend local en `AUTH_MODE=dev`.
 
 ---
 
-## 3. Point the backend at it
+## Primer admin de un ambiente
 
-`proyectos-backend/.env`:
-
-```
-AUTH_MODE=cognito
-COGNITO_USER_POOL_ID=us-east-1_XXXXXXXXX
-COGNITO_CLIENT_ID=xxxxxxxxxxxxxxxxxxxxxxxxxx
-COGNITO_REGION=us-east-1
-```
-
-Deployed, the CDK stack sets these on the Lambda automatically.
-
-**`AUTH_MODE=dev` in a deployed environment means anyone can choose their own
-role with an HTTP header.** It exists for local work only.
-
----
-
-## 4. Create the first admin
-
-Two halves, both required: Cognito holds the account, the `usuarios` table
-holds the role and the scope.
+Son dos mitades: la cuenta vive en Cognito y el rol en la tabla `usuarios`.
+Un script hace las dos:
 
 ```bash
-POOL=us-east-1_XXXXXXXXX
-EMAIL=tu.correo@economia.gob.cl
-
-# Cognito sends an invitation with a temporary password
-aws cognito-idp admin-create-user \
-  --user-pool-id "$POOL" \
-  --username "$EMAIL" \
-  --user-attributes Name=email,Value="$EMAIL" Name=email_verified,Value=true \
-                    Name=name,Value="Tu Nombre"
-
-aws cognito-idp admin-add-user-to-group \
-  --user-pool-id "$POOL" --username "$EMAIL" --group-name admin
-
-# The sub is the id the app keys off
-aws cognito-idp admin-get-user --user-pool-id "$POOL" --username "$EMAIL" \
-  --query 'UserAttributes[?Name==`sub`].Value' --output text
-```
-
-Then the row in the database (locally, that is just `psql` against your dev
-instance):
-
-```sql
-INSERT INTO usuarios (cognito_sub, nombre, email, rol)
-VALUES ('<sub>', 'Tu Nombre', 'tu.correo@economia.gob.cl', 'admin');
-```
-
-First sign-in uses the temporary password from the email; Cognito then forces
-a password change, which the login screen handles.
-
-### Scoped roles
-
-`empresa`, `organismo` and `region` need their scope, or the backend refuses
-to authenticate them (failing closed rather than showing everything):
-
-```sql
--- sees only BHP's projects
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, empresa_id)
-VALUES ('<sub>', 'Nombre', 'mail@empresa.cl', 'empresa', 1);
-
--- sees only DGA's permits
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, organismo_id)
-VALUES ('<sub>', 'Nombre', 'mail@dga.cl', 'organismo', 5);
-
--- sees every project in Antofagasta, all agencies
-INSERT INTO usuarios (cognito_sub, nombre, email, rol, region)
-VALUES ('<sub>', 'Nombre', 'mail@gore.cl', 'region', 'Antofagasta');
-```
-
-After the first admin exists, **everyone else is created from Administración
-→ Usuarios in the app** — one action does both halves: it creates the Cognito
-account (which emails the person an invite with a temporary password) and the
-`usuarios` row with the role and its scope. No AWS CLI needed for that.
-Deleting a user from that screen removes both halves too.
-
-Locally, that screen needs your CLI credentials to reach Cognito:
-
-```bash
+cd proyectos-backend
 export AWS_PROFILE=oasi
-npm run dev   # in proyectos-backend
+scripts/create-admin.sh dev tu.correo@economia.cl "Tu Nombre"
 ```
 
-Deployed, the Lambda already has exactly the permissions it needs for this
-(`cognito-idp:AdminCreateUser`, `AdminAddUserToGroup`,
-`AdminRemoveUserFromGroup`, `AdminDeleteUser` — see `oasi-stack.ts`), so
-nothing extra to configure there.
+Crea la cuenta en Cognito (o reusa la que exista), la mete al grupo `admin` y
+escribe la fila en `usuarios` a través de la Lambda `oasi-db-ops-<env>`. A una
+cuenta nueva le llega un correo con contraseña temporal, y la pantalla de
+login se encarga del cambio obligatorio en el primer ingreso.
+
+**Del segundo usuario en adelante no se usa la consola ni la CLI:** se crean
+desde **Administración → Usuarios** en la propia app. Esa pantalla hace las
+dos mitades en una acción (cuenta en Cognito + fila con rol y alcance), y al
+eliminar un usuario borra las dos.
+
+Para que esa pantalla funcione **corriendo en tu PC** necesita tus
+credenciales de AWS:
+
+```bash
+# en proyectos-backend/.env
+AWS_PROFILE=oasi
+```
+
+Desplegada no hace falta nada: la Lambda ya tiene exactamente los cuatro
+permisos que usa (`AdminCreateUser`, `AdminAddUserToGroup`,
+`AdminRemoveUserFromGroup`, `AdminDeleteUser`), acotados a su propio pool.
 
 ---
 
-## What this does NOT create
+## Límite de correos
 
-Deliberately, so nothing starts billing before you decide:
+El correo lo manda Cognito, con un tope de **50 mensajes por día**. Alcanza
+para invitaciones y recuperación de contraseña de un equipo chico.
 
-- no VPC or **NAT gateway** (~US$32/month, the main cost of the full stack)
-- no RDS instance
-- no Lambda or API Gateway
-- no S3 bucket
+Si alguna vez hay que dar de alta a mucha gente de golpe, hay que pasar a SES
+con un remitente `@economia.cl`. Es un cambio en `lib/auth-stack.ts`
+(`UserPoolEmail.withSES`) más la verificación del dominio.
 
-Those live in `Oasi-<stage>`, deployed separately with
-`npx cdk deploy Oasi-dev -c stage=dev` when the API needs to be online.
+---
 
-To take Cognito down again: `npx cdk destroy Oasi-Auth-dev -c stage=dev`
-(in `dev` it deletes the pool and its users; in `prod` it is set to retain).
+## Contraseñas
+
+Política del pool: mínimo 12 caracteres, con mayúscula, minúscula, número y
+símbolo. Recuperación solo por correo.
+
+El token de sesión dura 8 horas; el de refresco, 30 días.
