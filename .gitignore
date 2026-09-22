@@ -1,5 +1,5 @@
 node_modules/
-dist/
+# dist-lambda es la unica carpeta de build (ver scripts/build-lambda.sh)
 dist-lambda/
 .env
 *.log

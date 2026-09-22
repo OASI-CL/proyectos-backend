@@ -18,7 +18,7 @@ import { runMigrations } from '../db/migrate'
  *   {"action":"load-data","key":"ops/x.sql"}     one-time load of the historical data
  *   {"action":"create-admin","sub":"…","email":"…","nombre":"…"}
  *
- * Wrapped by scripts/db-ops.sh, scripts/load-data.sh, scripts/create-admin.sh.
+ * Wrapped by npm run db:* (scripts/db.ts), scripts/load-data.sh, scripts/create-admin.sh.
  * A thrown error surfaces as a failed invocation, which makes those scripts
  * and the CI step exit non-zero.
  */
@@ -73,7 +73,7 @@ async function status() {
  * base de los otros. No alcanza con haber corrido los REVOKE: esto intenta la
  * conexión y espera que falle.
  *
- * `scripts/db-ops.sh dev check-isolation`
+ * `npm run db:check -- --env=dev`
  */
 async function checkIsolation() {
   const others = (process.env.OTHER_DATABASES ?? '').split(',').map((s) => s.trim()).filter(Boolean)

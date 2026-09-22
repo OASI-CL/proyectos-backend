@@ -29,9 +29,9 @@ Comprobado ejecutando, no asumido: la API responde y llega a su base
 
 | Tarea | Comando / lugar |
 |---|---|
-| Ver estado de la base | `scripts/db-ops.sh <env> status` |
+| Ver estado de la base | `npm run db:status -- --env=<env>` |
 | Aplicar migraciones | `npm run db:migrate -- --env=<env>` |
-| Probar el aislamiento entre ambientes | `scripts/db-ops.sh <env> check-isolation` |
+| Probar el aislamiento entre ambientes | `npm run db:check -- --env=<env>` |
 | Ver por qué falló la API | CloudWatch → `/aws/lambda/oasi-api-<env>` |
 | Ver por qué falló una migración | CloudWatch → `/aws/lambda/oasi-db-ops-<env>` |
 | Ver el gasto | Billing and Cost Management → Cost Explorer |
@@ -179,8 +179,8 @@ npm run db:bootstrap                  # crea bases, usuarios y permisos
 npm run db:migrate -- --env=dev       # crea las tablas
 scripts/load-data.sh dev              # carga los datos históricos (opcional, 1 vez)
 scripts/create-admin.sh dev tu@correo.cl "Tu Nombre"   # primer admin
-scripts/db-ops.sh dev status          # revisar cómo quedó
-scripts/db-ops.sh dev check-isolation # comprobar que no alcanza la base del otro ambiente
+npm run db:status -- --env=dev        # revisar como quedo
+npm run db:check  -- --env=dev        # comprobar que no alcanza la base del otro ambiente
 ```
 
 Después del deploy, AWS manda un correo de **"Subscription Confirmation"** a

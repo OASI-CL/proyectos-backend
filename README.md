@@ -110,8 +110,7 @@ proyectos-backend/
     bin/app.ts                qué stacks existen
     lib/                      network / database / auth / storage / api
   scripts/
-    db-migrate.ts            npm run db:migrate -- --env=local|dev|prod
-    db-bootstrap.ts          crea bases y usuarios de cada ambiente (una vez)
+    db.ts                     todos los comandos de base de datos (npm run db:*)
     load-data.sh              carga inicial de datos históricos
     create-admin.sh           primer admin de un ambiente
     amplify-env.sh            apunta una rama de Amplify a su ambiente
@@ -259,8 +258,8 @@ curl http://localhost:3001/health
 | `npm run db:migrate -- --env=local` | Aplica las migraciones pendientes a la BD del `.env` |
 | `npm run db:migrate -- --env=dev` | Idem contra la base de dev en AWS (vía la Lambda `db-ops`) |
 | `npm run db:bootstrap` | Crea las bases y los usuarios de cada ambiente en el servidor RDS (una vez) |
-| `npm run build` | Compila TypeScript a `dist/` (`tsc`) |
-| `npm start` | Corre el build compilado localmente (`dist/src/app.local.js`) |
+| `npm run build` | Revisa los tipos, sin generar archivos (`tsc --noEmit`) |
+| `npm start` | Corre el build compilado localmente (`dist-lambda/src/app.local.js`) |
 | `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
 | `npm run test:lambda` | Prueba ese paquete desde una copia fuera del repo (detecta dependencias faltantes, rutas rotas, CORS abierto) |
 | `npm run infra:diff` | `cd infra && cdk diff` — qué cambiaría un deploy sin aplicarlo |
@@ -269,8 +268,8 @@ Scripts para operar un ambiente desplegado (usan tu `AWS_PROFILE`):
 
 | Comando | Qué hace |
 |---|---|
-| `scripts/db-ops.sh dev status` | Migraciones aplicadas y cantidad de filas |
-| `scripts/db-ops.sh dev check-isolation` | Comprueba que las credenciales de un ambiente no abran la base del otro |
+| `npm run db:status -- --env=dev` | Migraciones aplicadas y cantidad de filas |
+| `npm run db:check -- --env=dev` | Comprueba que las credenciales de un ambiente no abran la base del otro |
 | `scripts/load-data.sh dev` | Carga única de los datos desde tu base local; se niega si ya hay proyectos |
 | `scripts/create-admin.sh dev <email> "<nombre>"` | Primer admin de un ambiente (cuenta en Cognito + fila en `usuarios`) |
 | `scripts/amplify-env.sh <app-id> develop dev` | Apunta una rama de Amplify a su ambiente |
@@ -473,12 +472,18 @@ La base no tiene ninguna salida a internet. Para migrarla o cargarle datos no
 se usan túneles: la Lambda `db-ops` corre adentro de la red y se invoca con
 los scripts de `scripts/` o desde el CI.
 
-### Dos carpetas de build, no confundir
+### `dist-lambda/`: la única carpeta de build
 
-- `dist/` — salida de `tsc`, para correr local.
-- `dist-lambda/` — lo que sube a Lambda: el código compilado **más** los
-  `node_modules` de producción y los `.sql`. Lo genera `npm run build:lambda`
-  y lo prueba `npm run test:lambda`. El CI lo construye solo.
+No está en git (la genera `npm run build:lambda` y la prueba
+`npm run test:lambda`; en AWS la construye el CI). Es lo que se sube a Lambda,
+y tiene tres cosas:
+
+- el código compilado a JavaScript;
+- `node_modules` solo con dependencias de producción, porque el código
+  compilado sigue haciendo `require('express')`, `require('pg')`...;
+- una copia de `db/*.sql`, porque la Lambda que migra la base los lee en
+  tiempo de ejecución. Es la única copia y vive dentro del build, no en el
+  repo.
 
 `AUTH_MODE` decide cómo se autentica cada request:
 

@@ -6,7 +6,7 @@ import type { Pool, PoolClient } from 'pg'
  * Database migrations, with a record of what has already been applied.
  *
  * One implementation, used everywhere:
- *   local   npm run db:migrate -- --env=local  (scripts/db-migrate.ts)
+ *   local   npm run db:migrate -- --env=local  (scripts/db.ts)
  *   AWS     npm run db:migrate -- --env=dev|prod, which invokes that
  *           environment's db-ops Lambda (src/ops/dbOps.ts). CI runs the same
  *           command after every deploy.
