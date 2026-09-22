@@ -246,7 +246,7 @@ export const ACCOUNT = {
 
 export function envConfig(name: string): EnvConfig {
   if (name !== 'dev' && name !== 'prod') {
-    throw new Error(`Ambiente desconocido "${name}". Usá --context env=dev o env=prod.`)
+    throw new Error(`Ambiente desconocido "${name}". Usá 'dev' o 'prod'.`)
   }
   return CONFIG[name]
 }

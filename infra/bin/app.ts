@@ -13,11 +13,12 @@ import { CONFIG, SHARED, envConfig, sharedDatabaseNeeded, type EnvName } from '.
  * PUNTO DE ENTRADA — qué stacks existen y cómo se conectan
  * ============================================================================
  *
- * Compartidos por los dos ambientes (se despliegan una vez):
+ * Compartidos por los dos ambientes:
  *   Oasi-Account     acceso de GitHub por OIDC + aviso de presupuesto.
- *                    Se despliega A MANO, con credenciales de admin: define
- *                    los permisos con los que corre el CI, así que el CI no
- *                    puede modificarlo.
+ *                    Se despliega A MANO, con credenciales de admin. No hace
+ *                    falta excluirlo de nada: como nunca se lo nombra en un
+ *                    `cdk deploy <stacks>` del CI, nunca lo toca el CI, esté
+ *                    o no presente en la app.
  *   Oasi-Network     la VPC y el NAT.
  *   Oasi-Database    el servidor RDS, los secretos y la Lambda de bootstrap.
  *
@@ -28,10 +29,25 @@ import { CONFIG, SHARED, envConfig, sharedDatabaseNeeded, type EnvName } from '.
  *
  * Están separados para que un cambio en la API no toque la base de datos.
  *
+ * ---------------------------------------------------------------------------
+ * LOS OCHO STACKS SE INSTANCIAN SIEMPRE, PARA LOS DOS AMBIENTES A LA VEZ
+ * ---------------------------------------------------------------------------
+ * Antes esto se filtraba con `--context env=dev|prod`, dejando fuera de la
+ * app los stacks del otro ambiente. Se sacó a propósito: `Oasi-Database` es
+ * compartida por dev y prod, y CDK calcula automáticamente qué exportar entre
+ * stacks mirando TODA la app que tiene synthesizada en ese momento. Con el
+ * filtro, un deploy de "solo prod" no sabía que `Oasi-Api-dev` seguía
+ * existiendo de verdad en AWS y usando un secreto de `Oasi-Database` — CDK
+ * daba de baja esa exportación, y CloudFormation frenaba todo con
+ * "cannot delete export ... as it is in use by Oasi-Api-dev" (pasó de
+ * verdad). La app ahora siempre ve el estado completo; lo que decide qué se
+ * toca es a cuáles stacks se les pasa el NOMBRE en `cdk deploy`, no cuáles
+ * existen en el código.
+ *
  * Cómo se usa:
- *   npx cdk synth                        ver las plantillas, no toca AWS
- *   npx cdk diff  --context env=dev      qué cambiaría un deploy
- *   npx cdk deploy --context env=dev --all
+ *   npx cdk synth                               ver todas las plantillas, no toca AWS
+ *   npx cdk diff  Oasi-Api-dev Oasi-Database     qué cambiaría, solo para esos stacks
+ *   npx cdk deploy Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage-dev Oasi-Api-dev
  *
  * El frontend (Amplify) NO está acá: conectarlo a GitHub por CDK exige
  * guardar un token de GitHub de larga vida. Se crea una vez por consola y
@@ -42,31 +58,18 @@ const app = new cdk.App()
 
 const env = { account: process.env.CDK_DEFAULT_ACCOUNT, region: SHARED.region }
 const baseTags = { Project: 'OASI', ManagedBy: 'CDK' }
-
-/**
- * `--context env=dev` deja en la app SOLO los stacks de dev (más los
- * compartidos), así `cdk deploy --all --context env=dev` no toca prod.
- * Sin ese contexto están los dos ambientes, para poder mirar todo junto con
- * `cdk synth` o `cdk diff`.
- */
-const selectedEnv = app.node.tryGetContext('env') as string | undefined
-const environments = (selectedEnv ? [envConfig(selectedEnv).envName] : (Object.keys(CONFIG) as EnvName[]))
+const environments = Object.keys(CONFIG) as EnvName[]
 
 // ----------------------------------------------------------------------------
 // Compartidos
 // ----------------------------------------------------------------------------
 
-// Define los permisos con los que corre el CI, así que se despliega a mano y
-// queda FUERA de la app cuando se elige un ambiente: si estuviera, un
-// `deploy --all` del CI podría modificar sus propios permisos.
-if (!selectedEnv) {
-  new AccountStack(app, 'Oasi-Account', {
-    env,
-    description: 'OASI: acceso de GitHub por OIDC y aviso de presupuesto',
-    tags: baseTags,
-    terminationProtection: true,
-  })
-}
+new AccountStack(app, 'Oasi-Account', {
+  env,
+  description: 'OASI: acceso de GitHub por OIDC y aviso de presupuesto',
+  tags: baseTags,
+  terminationProtection: true,
+})
 
 const network = new NetworkStack(app, 'Oasi-Network', {
   env,
