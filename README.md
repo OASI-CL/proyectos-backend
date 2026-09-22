@@ -290,6 +290,7 @@ curl http://localhost:3001/health
 | `npm run db:generate` | **Después de editar un modelo:** escribe sola la migración con el cambio |
 | `npm run db:generate:custom` | Crea una migración vacía para SQL a mano (vistas, triggers, catálogos) |
 | `npm run db:baseline -- --env=... --hasta=...` | Declara que una base ya está al día hasta cierta migración (sin ejecutarla) |
+| `npm run db:wipe -- --env=... --confirm` | **Destructivo.** Vacía proyectos/permisos/empresas/comités de ese ambiente (no toca `usuarios`) para poder cargar datos nuevos desde cero |
 | `npm run build` | Revisa los tipos, sin generar archivos (`tsc --noEmit`) |
 | `npm start` | Corre el build compilado localmente (`dist-lambda/src/app.local.js`) |
 | `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
@@ -390,9 +391,10 @@ Excel: se cargan al crear la base.
 | `regiones` | Las 16 regiones de Chile: `id` (orden norte→sur), `numero` (número oficial), `codigo` (numeral romano), `nombre`, `nombre_oficial`. Más `Interregional` (90) y `Nivel Central` (91), que no son regiones reales pero vienen así en el Excel |
 | `sectores` | Sectores productivos, con `orden` de presentación |
 | `etapas_proyecto` | `no_iniciado`, `construccion`, `operacion` |
-| `estados_permiso` | `Pendiente`, `Resuelto`, `Descartado`. `es_final` marca los que cierran la tramitación, así las vistas no repiten la lista en cada cálculo |
+| `estados_permiso` | `Pendiente`, `Resuelto`, `Descartado`, `Desistido`. `es_final` marca los que cierran la tramitación (los tres últimos), así las vistas no repiten la lista en cada cálculo. **`Descartado` ≠ `Desistido`**: descartado es que OASI lo excluye del conteo; desistido es que el titular abandonó el trámite |
 | `ministerios` | Los 12 ministerios, con sigla |
 | `organismos` | Los 19 organismos, cada uno con su `ministerio_id` y nombre largo |
+| `tipologias` | Subclasificación dentro de un sector (71 filas, ej. sector Minería → "Minería Cobre"). Sin usar todavía: 0/326 proyectos la traen cargada |
 
 ### Tablas de datos
 
@@ -454,6 +456,17 @@ resumen:
 - `permisos_comite` solo trae el comité **actual** por permiso (el Excel no
   guarda el historial completo de en qué sesiones estuvo cada permiso) — eso
   se va a ir completando con el uso real de la app.
+- La planilla del 22-09-2026 trajo columnas que mezclan `1`/`0` numérico con
+  texto "Sí"/"No" para un mismo tipo de dato según la columna — `clean_bool`
+  reconoce los dos formatos.
+- `comite_registro` viene como texto ("Comité 10", "Por definir"): se extrae
+  el número con una expresión regular; lo que no matchea no vincula el
+  permiso a ningún comité.
+- `fecha_registro_catastro` mezcla fechas reales, números de serie de Excel
+  guardados como texto y fechas en formato `DD-MM-YYYY` como texto. `clean_date`
+  reconoce las tres formas; el resto (~30%) queda en `NULL`, no se adivina.
+- `n_catastro` en `proyectos` solo trae `1` o `2`. Se guarda tal cual — el
+  significado exacto no está confirmado con OASI.
 
 ---
 

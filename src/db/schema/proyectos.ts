@@ -17,6 +17,7 @@ import { empresas } from './empresas'
 import { etapasProyecto } from './etapasProyecto'
 import { regiones } from './regiones'
 import { sectores } from './sectores'
+import { tipologias } from './tipologias'
 
 /**
  * Los proyectos de inversión que se siguen. Cada uno tiene N permisos.
@@ -38,6 +39,8 @@ export const proyectos = pgTable(
       .references(() => empresas.id),
     region_id: bigint('region_id', { mode: 'number' }).references(() => regiones.id),
     sector_id: bigint('sector_id', { mode: 'number' }).references(() => sectores.id),
+    /** Subclasificación dentro del sector. Ver `db/schema/tipologias.ts`. */
+    tipologia_id: bigint('tipologia_id', { mode: 'number' }).references(() => tipologias.id),
     etapa_id: bigint('etapa_id', { mode: 'number' }).references(() => etapasProyecto.id),
     inversion_mmusd: numeric('inversion_mmusd', { mode: 'number' }),
     empleo_construccion: integer('empleo_construccion'),
@@ -62,6 +65,23 @@ export const proyectos = pgTable(
      * deja en 'borrador' (no se borra, para que nadie pierda su trabajo).
      */
     estado_validacion: text('estado_validacion').notNull().default('validado'),
+
+    // --- Columnas de la planilla "Levantamiento de Permisos" (22-09-2026) ---
+    /**
+     * 1 o 2 en el Excel origen. Significado exacto sin confirmar con OASI —
+     * parece distinguir dos tandas del catastro, pero se guarda tal cual en
+     * vez de adivinar. Preguntar antes de usarlo en un reporte.
+     */
+    n_catastro: integer('n_catastro'),
+    /** Si el proyecto está en el catastro de Hacienda (a nivel proyecto; distinto de `permisos.incluido_catastro_hacienda`, que es por permiso). */
+    incluido_en_catastro: boolean('incluido_en_catastro'),
+    /** Si el proyecto está dentro del universo de seguimiento activo de OASI. */
+    en_universo_permisos: boolean('en_universo_permisos'),
+    /** Seguimiento de contacto para proyectos ya liberados del catastro. Disperso en el Excel origen (108/326 con dato). */
+    sigue_liberado_al_contactar: boolean('sigue_liberado_al_contactar'),
+    listado_37_proyectos_liberados: boolean('listado_37_proyectos_liberados'),
+    listado_97_proyectos_no_iniciados: boolean('listado_97_proyectos_no_iniciados'),
+
     ...auditoria,
   },
   (tabla) => [

@@ -66,6 +66,21 @@ export const permisos = pgTable(
     observaciones: text('observaciones'),
     /** Ver el mismo campo en `proyectos`. */
     estado_validacion: text('estado_validacion').notNull().default('validado'),
+
+    // --- Columnas de la planilla "Levantamiento de Permisos" (22-09-2026) ---
+    /** Si el permiso está dentro del universo de seguimiento activo de OASI. */
+    en_universo: boolean('en_universo'),
+    fecha_registro_catastro: date('fecha_registro_catastro', { mode: 'string' }),
+    /**
+     * Cuándo y quién del equipo lo actualizó por última vez EN LA PLANILLA
+     * origen (nombres de pila: "Victoria", "Coni", "Flo", ...). No es lo
+     * mismo que `updated_by`/`updated_at`: esos los pone el trigger de
+     * auditoría cuando alguien edita desde la app, con el sub de Cognito.
+     * Este par es el registro manual previo, tal como venía en el Excel.
+     */
+    fecha_actualizacion: date('fecha_actualizacion', { mode: 'string' }),
+    quien_actualizo: text('quien_actualizo'),
+
     ...auditoria,
   },
   (tabla) => [

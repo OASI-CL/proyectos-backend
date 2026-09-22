@@ -380,6 +380,16 @@ día alguien "simplifica" eso volviendo al provider, este error vuelve.
 queda en `DELETE_IN_PROGRESS` durante mucho rato, es casi seguro eso:
 prendela con `aws rds start-db-instance` y la eliminación sigue sola.
 
+**`TRUNCATE ... CASCADE` no hace lo que parece.** `npm run db:wipe` (vacía
+proyectos/permisos para recargar datos nuevos) usaba `TRUNCATE ... CASCADE`
+la primera vez, y de paso vació `usuarios` — esa tabla no tiene datos que
+seguir en cascada, pero tiene una FK *apuntando a* `empresas`, y CASCADE de
+TRUNCATE arrastra CUALQUIER tabla con una FK hacia la que se vacía, sin
+importar si hay filas relacionadas de verdad. Se cambió a `DELETE FROM` en
+orden de dependencia (`src/ops/dbOps.ts`, `wipeData`): hace lo mismo pero,
+si algo externo referencia una fila real, Postgres corta con un error en vez
+de arrasar en silencio.
+
 ---
 
 ## CI/CD

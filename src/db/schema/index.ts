@@ -14,6 +14,7 @@ export * from './etapasProyecto'
 export * from './estadosPermiso'
 export * from './ministerios'
 export * from './organismos'
+export * from './tipologias'
 
 // Entidades del negocio.
 export * from './empresas'

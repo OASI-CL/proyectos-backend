@@ -68,6 +68,13 @@ export interface VPermiso extends Permiso {
   semaforo: Semaforo
 }
 
+// Columnas de la planilla origen agregadas el 22-09-2026 (ver
+// src/db/schema/permisos.ts para el detalle de cada una):
+//   en_universo, fecha_registro_catastro, fecha_actualizacion, quien_actualizo
+// Ya están en `Permiso` (vienen del modelo). `estado` ahora puede valer
+// también 'Desistido' además de 'Pendiente'/'Resuelto'/'Descartado' — ver
+// EstadoPermiso en shared/types.ts.
+
 /** Traduce los query params de filtro a condiciones SQL sobre v_permisos. */
 export function filtrosPermisos(wb: WhereBuilder, q: Record<string, unknown>) {
   const s = (k: string) => (typeof q[k] === 'string' && q[k] !== '' ? String(q[k]) : undefined)
