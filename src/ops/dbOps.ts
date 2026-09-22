@@ -1,6 +1,6 @@
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3'
 import { pool } from '../db/client'
-import { runMigrations } from '../db/migrate'
+import { baselineMigrations, runMigrations } from '../db/migrate'
 
 /**
  * db-ops Lambda: the only way anything outside the VPC touches the database.
@@ -26,6 +26,7 @@ import { runMigrations } from '../db/migrate'
 type DbOpsEvent =
   | { action: 'status' }
   | { action: 'migrate' }
+  | { action: 'baseline'; hasta: string }
   | { action: 'check-isolation' }
   | { action: 'load-data'; key: string }
   | { action: 'create-admin'; sub: string; email: string; nombre: string }
@@ -41,6 +42,8 @@ export async function handler(event: DbOpsEvent) {
       return status()
     case 'migrate':
       return runMigrations(pool)
+    case 'baseline':
+      return baselineMigrations(pool, event.hasta)
     case 'check-isolation':
       return checkIsolation()
     case 'load-data':

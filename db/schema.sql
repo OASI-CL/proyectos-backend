@@ -597,13 +597,16 @@ LEFT JOIN estados_permiso ep ON ep.id = p.estado_id
 GROUP BY pr.id, e.nombre, r.nombre, r.numero, r.codigo, s.nombre, et.nombre, et.codigo;
 
 -- ----------------------------------------------------------------------------
--- v_permisos_comite: igual que v_permisos pero calculado a la fecha del
--- comité (c.fecha) en vez de CURRENT_DATE. Si permisos_comite trae un
--- snapshot guardado (estado_snapshot_id/dias_snapshot) se usa ese; si no, se
--- reconstruye contra la fecha del comité.
+-- v_permisos_comite: un permiso por cada sesión POSTERIOR a la de su ingreso,
+-- con los cálculos a la fecha de esa sesión.
+--
+-- DISTINCT ON evita duplicados: `permisos_comite` admite que un permiso quede
+-- vinculado a varias sesiones (hoy no pasa, pero el modelo lo permite), y sin
+-- esto el mismo permiso aparecería una vez por cada vínculo anterior. Se
+-- conserva el vínculo más reciente (co.numero DESC).
 -- ----------------------------------------------------------------------------
 CREATE VIEW v_permisos_comite AS
-SELECT
+SELECT DISTINCT ON (c.id, p.id)
   p.*,
   ep.nombre          AS estado,
   ep.codigo          AS estado_codigo,
@@ -621,73 +624,59 @@ SELECT
   pr.etapa_id        AS etapa_id,
   et.nombre          AS etapa,
   pr.inversion_mmusd AS inversion_mmusd,
+  -- La sesión que se está mirando.
   c.id               AS comite_id,
   c.numero           AS comite_numero,
   c.fecha            AS comite_fecha,
+  -- La sesión en la que el permiso entró (siempre anterior a la de arriba).
+  co.numero          AS comite_ingreso_numero,
   pc.compromiso      AS compromiso,
-  COALESCE(
-    pc.dias_snapshot,
-    CASE WHEN p.fecha_ingreso IS NOT NULL
-         THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)
-         ELSE NULL END
-  )                                                                AS dias_tramitacion,
-  COALESCE(
-    eps.nombre,
-    CASE WHEN p.fecha_resolucion IS NOT NULL AND p.fecha_resolucion <= c.fecha
-         THEN ep.nombre
-         ELSE 'Pendiente' END
-  )                                                                AS estado_a_la_fecha,
   CASE WHEN p.fecha_ingreso IS NOT NULL
-       THEN COALESCE(pc.dias_snapshot,
-              (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)) < 90
+       THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)
+       ELSE NULL END                                              AS dias_tramitacion,
+  -- Estado tal como estaba el día de la sesión: si la resolución es posterior
+  -- a esa fecha, ese día todavía estaba pendiente.
+  CASE WHEN p.fecha_resolucion IS NOT NULL AND p.fecha_resolucion <= c.fecha
+       THEN ep.nombre ELSE 'Pendiente' END                        AS estado_a_la_fecha,
+  CASE WHEN p.fecha_resolucion IS NOT NULL AND p.fecha_resolucion <= c.fecha
+       THEN ep.es_final ELSE false END                            AS finalizado_a_la_fecha,
+  CASE WHEN p.fecha_ingreso IS NOT NULL
+       THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso) < 90
        ELSE NULL END                                              AS menos_3_meses,
   CASE WHEN p.fecha_ingreso IS NOT NULL
-       THEN COALESCE(pc.dias_snapshot,
-              (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)) BETWEEN 90 AND 180
+       THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso) BETWEEN 90 AND 180
        ELSE NULL END                                              AS entre_3_y_6_meses,
   CASE WHEN p.fecha_ingreso IS NOT NULL
-       THEN COALESCE(pc.dias_snapshot,
-              (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)) > 180
+       THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso) > 180
        ELSE NULL END                                              AS supera_6_meses
-FROM permisos_comite pc
-JOIN permisos p              ON p.id  = pc.permiso_id
+FROM comites c
+JOIN comites co              ON co.numero < c.numero      -- <-- el acumulado estricto
+JOIN permisos_comite pc      ON pc.comite_id = co.id
+JOIN permisos p              ON p.id = pc.permiso_id
 JOIN estados_permiso ep      ON ep.id = p.estado_id
-LEFT JOIN estados_permiso eps ON eps.id = pc.estado_snapshot_id
-JOIN comites c               ON c.id  = pc.comite_id
 JOIN proyectos pr            ON pr.id = p.proyecto_id
-JOIN organismos o            ON o.id  = p.organismo_id
-JOIN ministerios m           ON m.id  = o.ministerio_id
-JOIN empresas e              ON e.id  = pr.empresa_id
-LEFT JOIN regiones r         ON r.id  = pr.region_id
-LEFT JOIN sectores s         ON s.id  = pr.sector_id
-LEFT JOIN etapas_proyecto et ON et.id = pr.etapa_id;
+JOIN organismos o            ON o.id = p.organismo_id
+JOIN ministerios m           ON m.id = o.ministerio_id
+JOIN empresas e              ON e.id = pr.empresa_id
+LEFT JOIN regiones r         ON r.id = pr.region_id
+LEFT JOIN sectores s         ON s.id = pr.sector_id
+LEFT JOIN etapas_proyecto et ON et.id = pr.etapa_id
+ORDER BY c.id, p.id, co.numero DESC;
 
 -- ----------------------------------------------------------------------------
--- v_resumen_comite: una fila por sesión.
+-- v_resumen_comite: una fila por sesión, construida sobre la vista anterior
+-- para no repetir los cálculos en dos lugares (antes estaban duplicados).
 -- ----------------------------------------------------------------------------
 CREATE VIEW v_resumen_comite AS
 SELECT
   c.id                                                          AS comite_id,
   c.numero                                                      AS comite_numero,
   c.fecha                                                       AS comite_fecha,
-  COUNT(pc.id)                                                  AS permisos_en_agenda,
-  COUNT(pc.id) FILTER (
-    WHERE COALESCE(
-      eps.es_final,
-      (p.fecha_resolucion IS NOT NULL AND p.fecha_resolucion <= c.fecha AND ep.es_final)
-    )
-  )                                                              AS permisos_resueltos,
-  AVG(
-    COALESCE(pc.dias_snapshot,
-      CASE WHEN p.fecha_ingreso IS NOT NULL
-           THEN (LEAST(COALESCE(p.fecha_resolucion, c.fecha), c.fecha) - p.fecha_ingreso)
-           ELSE NULL END)
-  )                                                              AS promedio_dias
+  count(vpc.id)                                                 AS permisos_en_agenda,
+  count(vpc.id) FILTER (WHERE vpc.finalizado_a_la_fecha)        AS permisos_resueltos,
+  avg(vpc.dias_tramitacion)                                     AS promedio_dias
 FROM comites c
-LEFT JOIN permisos_comite pc  ON pc.comite_id = c.id
-LEFT JOIN permisos p          ON p.id  = pc.permiso_id
-LEFT JOIN estados_permiso ep  ON ep.id = p.estado_id
-LEFT JOIN estados_permiso eps ON eps.id = pc.estado_snapshot_id
+LEFT JOIN v_permisos_comite vpc ON vpc.comite_id = c.id
 GROUP BY c.id, c.numero, c.fecha;
 
 -- ----------------------------------------------------------------------------

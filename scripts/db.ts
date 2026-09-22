@@ -23,14 +23,17 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda'
  * ============================================================================
  */
 
-type Comando = 'migrate' | 'status' | 'check' | 'bootstrap'
+type Comando = 'migrate' | 'status' | 'check' | 'bootstrap' | 'baseline'
 type Ambiente = 'local' | 'dev' | 'prod'
 
 const USO = `Uso:
-  npm run db:migrate -- --env=local|dev|prod
-  npm run db:status  -- --env=dev|prod
-  npm run db:check   -- --env=dev|prod
-  npm run db:bootstrap`
+  npm run db:migrate  -- --env=local|dev|prod
+  npm run db:status   -- --env=dev|prod
+  npm run db:check    -- --env=dev|prod
+  npm run db:bootstrap
+  npm run db:baseline -- --env=local --hasta=002_catalogos.sql
+      (solo para una base que ya tiene ese estado y no tiene historial:
+       marca como aplicadas las migraciones hasta ese archivo, sin correrlas)`
 
 const comando = process.argv[2] as Comando | undefined
 const ambiente = process.argv.slice(3).find((a) => a.startsWith('--env='))?.split('=')[1] as
@@ -79,6 +82,17 @@ async function migrarLocal() {
   }
 }
 
+async function baselineLocal(hasta: string) {
+  await import('dotenv/config')
+  const { pool } = await import('../src/db/client.js')
+  const { baselineMigrations } = await import('../src/db/migrate.js')
+  try {
+    console.log(JSON.stringify(await baselineMigrations(pool, hasta), null, 2))
+  } finally {
+    await pool.end()
+  }
+}
+
 function exigirAmbienteAws(): 'dev' | 'prod' {
   if (ambiente !== 'dev' && ambiente !== 'prod') {
     console.error(`Falta --env=dev o --env=prod\n\n${USO}`)
@@ -104,6 +118,16 @@ async function main() {
     // Es la única Lambda con la credencial maestra del servidor.
     case 'bootstrap':
       return invocar('oasi-db-bootstrap', {})
+
+    case 'baseline': {
+      const hasta = process.argv.slice(3).find((a) => a.startsWith('--hasta='))?.split('=')[1]
+      if (!hasta) {
+        console.error(`Falta --hasta=<archivo>\n\n${USO}`)
+        process.exit(2)
+      }
+      if (ambiente === 'local') return baselineLocal(hasta)
+      return invocar(`oasi-db-ops-${exigirAmbienteAws()}`, { action: 'baseline', hasta })
+    }
 
     default:
       console.error(USO)

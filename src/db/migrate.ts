@@ -11,17 +11,22 @@ import type { Pool, PoolClient } from 'pg'
  *           environment's db-ops Lambda (src/ops/dbOps.ts). CI runs the same
  *           command after every deploy.
  *
- * The runner looks at the database and picks one of three paths:
+ * The runner looks at the database and picks one of two paths:
  *
  *   fresh        no tables yet -> apply db/schema.sql (the full current
  *                model) and mark every file in db/migrations/ as applied,
  *                since schema.sql already contains all of them.
- *   baseline     tables exist but no _migrations table -> a database created
- *                before this runner existed. Mark every current migration as
- *                applied without running it: schema.sql and the migrations
- *                are kept in sync, so an existing database is assumed to be
- *                current. (Same idea as Flyway's baselineOnMigrate.)
  *   incremental  apply, in filename order, every migration not yet recorded.
+ *
+ * Si la base tiene tablas pero NO tiene historial (`_migrations`), el runner
+ * se DETIENE y pide un baseline explícito:
+ *
+ *   npm run db:baseline -- --env=local --hasta=002_catalogos.sql
+ *
+ * Antes eso se hacía solo, asumiendo que una base sin historial estaba al día.
+ * Era peligroso: si había una migración nueva, quedaba marcada como aplicada
+ * SIN ejecutarse, y la base se quedaba vieja en silencio. Pasó de verdad con
+ * 003_comite_acumulado.sql. Ahora hay que declarar hasta dónde está la base.
  *
  * WRITING A NEW MIGRATION
  *   - name it NNN_description.sql, the next number in db/migrations/
@@ -47,6 +52,20 @@ const LOCK_KEY = 947_210_331
 export interface MigrationResult {
   mode: 'fresh' | 'baseline' | 'incremental'
   applied: string[]
+}
+
+/** Error con instrucciones, para una base que necesita baseline explícito. */
+export class BaselineRequiredError extends Error {
+  constructor(readonly files: string[]) {
+    super(
+      'La base tiene tablas pero no tiene historial de migraciones.\n' +
+        'Declarás hasta dónde está al día con:\n' +
+        `  npm run db:baseline -- --env=<ambiente> --hasta=<archivo>\n` +
+        `Archivos disponibles: ${files.join(', ')}\n` +
+        'Después corré db:migrate para aplicar las que falten.',
+    )
+    this.name = 'BaselineRequiredError'
+  }
 }
 
 async function tableExists(client: PoolClient, name: string): Promise<boolean> {
@@ -93,6 +112,37 @@ async function renameLegacyTrackingTable(client: PoolClient) {
   }
 }
 
+/**
+ * Marca como aplicadas, sin ejecutarlas, todas las migraciones hasta `hasta`
+ * (incluida). Es para una base que ya tiene ese estado — por ejemplo la que
+ * se creó antes de que existiera el historial. Lo que venga después de
+ * `hasta` queda pendiente y lo aplica db:migrate.
+ */
+export async function baselineMigrations(
+  pool: Pool,
+  hasta: string,
+  log: (msg: string) => void = console.log,
+): Promise<MigrationResult> {
+  const files = await migrationFiles()
+  const corte = files.indexOf(hasta)
+  if (corte === -1) {
+    throw new Error(`"${hasta}" no existe. Archivos disponibles: ${files.join(', ')}`)
+  }
+
+  const marcar = files.slice(0, corte + 1)
+  const client = await pool.connect()
+  try {
+    await client.query(CREATE_TRACKING_TABLE)
+    await record(client, marcar)
+    log(`Marcadas como aplicadas (sin ejecutar): ${marcar.join(', ')}`)
+    const pendientes = files.slice(corte + 1)
+    if (pendientes.length) log(`Quedan pendientes: ${pendientes.join(', ')}`)
+    return { mode: 'baseline', applied: marcar }
+  } finally {
+    client.release()
+  }
+}
+
 export async function runMigrations(pool: Pool, log: (msg: string) => void = console.log): Promise<MigrationResult> {
   const client = await pool.connect()
   let inTransaction = false
@@ -118,12 +168,9 @@ export async function runMigrations(pool: Pool, log: (msg: string) => void = con
       return { mode: 'fresh', applied: ['schema.sql'] }
     }
 
-    if (!hasTracking) {
-      log(`Existing database without migration history: marking ${files.length} migration(s) as applied`)
-      await client.query(CREATE_TRACKING_TABLE)
-      await record(client, files)
-      return { mode: 'baseline', applied: [] }
-    }
+    // Base con tablas pero sin historial: no se puede adivinar hasta dónde
+    // está al día, así que se pide declararlo (ver BaselineRequiredError).
+    if (!hasTracking) throw new BaselineRequiredError(files)
 
     const { rows } = await client.query<{ nombre: string }>('SELECT nombre FROM _migrations')
     const done = new Set(rows.map((r) => r.nombre))
