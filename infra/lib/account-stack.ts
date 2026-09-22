@@ -38,12 +38,27 @@ export class AccountStack extends cdk.Stack {
           {
             StringEquals: {
               'token.actions.githubusercontent.com:aud': 'sts.amazonaws.com',
-              // A job only gets this subject when it declares
-              // `environment: <stage>`. That is what ties the role to the
-              // environment (and its protection rules), not to a branch name
-              // anyone could push.
-              'token.actions.githubusercontent.com:sub':
+            },
+            // A job only gets this subject when it declares
+            // `environment: <stage>`. That is what ties the role to the
+            // environment (and its protection rules), not to a branch name
+            // anyone could push.
+            //
+            // StringLike (not StringEquals) with a wildcard: GitHub has
+            // started including the org's and repo's immutable numeric ids
+            // in the sub claim — 'repo:OASI-CL@329253682/proyectos-backend@
+            // 1370521372:environment:dev' instead of the plain
+            // 'repo:OASI-CL/proyectos-backend:environment:dev'. It is a
+            // rollout, not something this account controls, and it broke
+            // deploys with "Not authorized to perform
+            // sts:AssumeRoleWithWebIdentity" the first time CI ran (verified
+            // against the actual denied request in CloudTrail). Matching
+            // both shapes means it keeps working whichever one GitHub sends.
+            StringLike: {
+              'token.actions.githubusercontent.com:sub': [
                 `repo:${ACCOUNT.githubOrg}/${ACCOUNT.githubRepo}:environment:${stage}`,
+                `repo:${ACCOUNT.githubOrg}@*/${ACCOUNT.githubRepo}@*:environment:${stage}`,
+              ],
             },
           },
           'sts:AssumeRoleWithWebIdentity',
