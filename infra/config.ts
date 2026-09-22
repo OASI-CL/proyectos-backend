@@ -195,8 +195,8 @@ export const CONFIG: Record<EnvName, EnvConfig> = {
       // Permite correr el frontend en tu PC contra la API de dev desplegada
       // (npm run dev:aws en proyectos-frontend).
       'http://localhost:5173',
-      // Acá va la URL de Amplify de dev cuando exista:
-      // 'https://develop.dxxxxxxxxxxxx.amplifyapp.com',
+      // El sitio de dev en Amplify (rama develop).
+      'https://develop.dyfx5stqf038v.amplifyapp.com',
     ],
 
     alarmEmail: 'oasi-ti@economia.cl',
