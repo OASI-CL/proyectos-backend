@@ -19,4 +19,4 @@ infra/*.js
 infra/*.d.ts
 
 # written by `cdk deploy --outputs-file` in CI
-infra/outputs.json
+infra/outputs*.json

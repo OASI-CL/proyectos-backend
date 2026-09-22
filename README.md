@@ -31,14 +31,22 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
   alta/edición/baja de usuarios desde la propia app
   (`src/services/cognitoUsers.ts`, `src/routes/usuarios.ts`) — no hace falta
   la consola de AWS salvo para crear el primer admin
-- `infra/` — stacks de CDK para desplegar todo (ver "Deploy" abajo)
+- `infra/` — infraestructura en CDK, con la configuración de los dos ambientes
+  en un solo archivo (`infra/config.ts`). Ver "Deploy" abajo y
+  [`infra/README.md`](infra/README.md)
+- CI/CD por rama: `develop` → dev, `main` → prod (con aprobación manual)
 
-- **Desplegado en AWS**, ambiente dev funcionando con los datos cargados;
-  CI/CD por rama (`develop` → dev, `main` → prod). Ver "Deploy" abajo.
+- **dev desplegado y funcionando** en AWS, con los datos cargados. La API de
+  dev es `https://39dg0v2j8j.execute-api.us-east-1.amazonaws.com/dev`
 
 🚧 Pendiente:
-- Ambiente prod (se crea con el primer merge a `main`).
-- No hay tests automatizados de lógica de negocio.
+- Crear prod: pasa con el primer merge a `main` (su base ya existe, vacía).
+- Conectar las dos apps de Amplify (se hace por consola, una vez).
+- Crear los Environments `dev` y `prod` en GitHub con su secreto, para que el
+  CI pueda desplegar.
+- No hay tests automatizados de lógica de negocio: el CI verifica typecheck,
+  que el paquete de la Lambda funcione y que la API desplegada llegue a su
+  base de datos.
 - `src/routes/catalogos.ts` (español) y `src/routes/catalog.ts` (inglés)
   siguen coexistiendo — comparten el SQL vía `src/models/catalog.ts`, pero el
   primero solo se saca cuando el frontend termine de migrar a `/catalog`.
@@ -52,7 +60,7 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 | Runtime | Node.js 24 (LTS) + TypeScript |
 | Framework HTTP | Express 5 |
 | Deploy | AWS Lambda + API Gateway, vía `serverless-http` |
-| Base de datos | PostgreSQL (RDS t3.micro en prod, local para desarrollo) |
+| Base de datos | PostgreSQL (RDS `db.t4g.micro` en AWS, local para desarrollo) |
 | Cliente DB | `pg` (pool de conexiones). **No** se usa RDS Data API. |
 | Auth | AWS Cognito (JWT verificado con `aws-jwt-verify`) |
 | Adjuntos | S3 (`@aws-sdk/client-s3` + presigned URLs) |
@@ -97,7 +105,18 @@ proyectos-backend/
     schema.sql              schema completo de Postgres (tablas + vistas)
     migrations/               cambios incrementales sobre una BD ya sembrada (idempotentes)
     seed.py                  carga el Excel origen -> Postgres
-  infra/                    CDK: AuthStack (Cognito, gratis) + OasiStack (VPC/RDS/Lambda/API GW/S3)
+  infra/                    infraestructura en CDK (ver infra/README.md)
+    config.ts                 TODA la configuración de los ambientes, en un archivo
+    bin/app.ts                qué stacks existen
+    lib/                      network / database / auth / storage / api
+  scripts/
+    db-migrate.ts            npm run db:migrate -- --env=local|dev|prod
+    db-bootstrap.ts          crea bases y usuarios de cada ambiente (una vez)
+    load-data.sh              carga inicial de datos históricos
+    create-admin.sh           primer admin de un ambiente
+    amplify-env.sh            apunta una rama de Amplify a su ambiente
+    build-lambda.sh           arma dist-lambda/
+    smoke-lambda.cjs          prueba dist-lambda/ antes de desplegarlo
   data/                     (no versionado) acá va el Excel origen, ver abajo
   .venv/                    (no versionado) entorno virtual Python para seed.py
 ```
@@ -173,7 +192,7 @@ ellos esas rutas responden 503 y el resto de la API funciona igual.
 ### 5. Aplicar el schema
 
 ```bash
-npm run migrate
+npm run db:migrate -- --env=local
 ```
 
 Mira la base del `.env` y decide solo:
@@ -184,9 +203,10 @@ Mira la base del `.env` y decide solo:
 - **con historial** → aplica solo las migraciones de `db/migrations/` que
   todavía no corrieron, cada una en su propia transacción
 
-Lo que se aplicó queda en la tabla `schema_migrations`. Es el mismo código que
-corre en AWS después de cada deploy (`src/db/migrate.ts`). Cómo escribir una
-migración nueva: `DEPLOYMENT.md` → "Adding a database change".
+Lo que se aplicó queda en la tabla `_migrations`. Es el mismo código que corre
+en AWS después de cada deploy (`src/db/migrate.ts`). Cómo escribir una
+migración nueva: [`infra/README.md`](infra/README.md) → "Migraciones de base
+de datos".
 
 ### 6. Cargar los datos del Excel (opcional, para tener datos reales)
 
@@ -236,7 +256,9 @@ curl http://localhost:3001/health
 |---|---|
 | `npm run dev` | Levanta `src/app.local.ts` con `tsx watch` (recarga en caliente) |
 | `npm run check` | **Antes de subir.** Lo mismo que corre el CI: typecheck de API e infra, build del paquete de Lambda y smoke test de ese paquete |
-| `npm run migrate` | Aplica las migraciones pendientes a la BD del `.env` |
+| `npm run db:migrate -- --env=local` | Aplica las migraciones pendientes a la BD del `.env` |
+| `npm run db:migrate -- --env=dev` | Idem contra la base de dev en AWS (vía la Lambda `db-ops`) |
+| `npm run db:bootstrap` | Crea las bases y los usuarios de cada ambiente en el servidor RDS (una vez) |
 | `npm run build` | Compila TypeScript a `dist/` (`tsc`) |
 | `npm start` | Corre el build compilado localmente (`dist/src/app.local.js`) |
 | `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
@@ -248,7 +270,7 @@ Scripts para operar un ambiente desplegado (usan tu `AWS_PROFILE`):
 | Comando | Qué hace |
 |---|---|
 | `scripts/db-ops.sh dev status` | Migraciones aplicadas y cantidad de filas |
-| `scripts/db-ops.sh dev migrate` | Aplica migraciones pendientes (el CI ya lo hace en cada deploy) |
+| `scripts/db-ops.sh dev check-isolation` | Comprueba que las credenciales de un ambiente no abran la base del otro |
 | `scripts/load-data.sh dev` | Carga única de los datos desde tu base local; se niega si ya hay proyectos |
 | `scripts/create-admin.sh dev <email> "<nombre>"` | Primer admin de un ambiente (cuenta en Cognito + fila en `usuarios`) |
 | `scripts/amplify-env.sh <app-id> develop dev` | Apunta una rama de Amplify a su ambiente |
@@ -401,7 +423,7 @@ resumen:
 
 ## Deploy
 
-**Guía completa (en inglés): [`DEPLOYMENT.md`](DEPLOYMENT.md).** Resumen:
+**Guía completa: [`infra/README.md`](infra/README.md).** Resumen:
 
 ### Dos ambientes, uno por rama
 
@@ -409,16 +431,21 @@ resumen:
 |---|---|---|
 | Rama (en los dos repos) | `develop` | `main` |
 | Qué pasa al hacer push | CI → deploy dev → migraciones → chequeo de salud | CI → **aprobación** → deploy prod → migraciones → chequeo de salud |
-| Base de datos | propia, respaldos 1 día | propia, respaldos 14 días, protegida contra borrado |
+| Base de datos | base `oasi_dev` con usuario propio | base `oasi_prod` con usuario propio |
 | Usuarios | pool Cognito propio | pool Cognito propio (cuentas separadas) |
-| Costo aprox. | ~US$24/mes | ~US$55/mes |
+| Costo | los dos juntos, ~US$24/mes | |
+
+Dev y prod comparten la red y el **servidor** de base de datos (es lo que hace
+que dev salga casi gratis), pero cada uno tiene su propia base, su propio
+usuario de Postgres, su propio secreto y su propia Lambda. Las credenciales de
+dev no pueden abrir la base de prod.
 
 La configuración de cada ambiente está en **un solo archivo**:
-`infra/lib/config.ts`.
+[`infra/config.ts`](infra/config.ts).
 
 ### El día a día
 
-1. Cambiás código y probás en local (`npm run dev`, `npm run migrate`).
+1. Cambiás código y probás en local (`npm run dev`, `npm run db:migrate -- --env=local`).
 2. **`npm run check`** — corre lo mismo que el CI. Si pasa acá, pasa allá.
 3. Push a `develop` → GitHub Actions despliega a dev, aplica migraciones y
    verifica que la API llegue a la base.
@@ -428,12 +455,19 @@ La configuración de cada ambiente está en **un solo archivo**:
 
 ### Stacks de CDK (`infra/`)
 
+Compartidos por los dos ambientes:
+
 - **`Oasi-Account`** — una vez por cuenta: permite a GitHub desplegar sin
-  guardar claves de AWS (OIDC), un rol por ambiente, y la alerta de
-  presupuesto.
-- **`Oasi-Auth-<stage>`** — Cognito.
-- **`Oasi-<stage>`** — VPC, RDS Postgres, las dos Lambdas (`api` y `db-ops`),
-  API Gateway, S3, alarmas por correo.
+  guardar claves de AWS (OIDC), un rol por ambiente, y la alerta de presupuesto.
+- **`Oasi-Network`** — VPC y la salida a internet (NAT instance, ~US$7/mes,
+  en vez del NAT Gateway de ~US$32).
+- **`Oasi-Database`** — el servidor Postgres con una base aislada por ambiente.
+
+Por ambiente:
+
+- **`Oasi-Auth-<env>`** — Cognito (dev reusa el pool que ya existía).
+- **`Oasi-Storage-<env>`** — bucket de adjuntos.
+- **`Oasi-Api-<env>`** — Lambda de la API, HTTP API y Lambda `db-ops`.
 
 La base no tiene ninguna salida a internet. Para migrarla o cargarle datos no
 se usan túneles: la Lambda `db-ops` corre adentro de la red y se invoca con

@@ -19,6 +19,10 @@ const os = require('node:os')
 const source = path.join(__dirname, '..', 'dist-lambda')
 process.env.NODE_ENV = 'production'
 process.env.AUTH_MODE = 'cognito'
+// Como en AWS: el HTTP API tiene un stage con nombre, y la ruta que recibe la
+// Lambda lo incluye (/smoke/health). Si el handler no lo quita, Express
+// responde 404 a todo — pasó de verdad, por eso el test lo cubre.
+process.env.API_STAGE = 'smoke'
 
 async function main() {
   assert.ok(fs.existsSync(source), 'dist-lambda/ not found: run npm run build:lambda first')
@@ -30,19 +34,35 @@ async function main() {
   fs.cpSync(source, bundle, { recursive: true })
 
   // 1. The API handler loads and answers through the API Gateway adapter.
+  //    Event shape: HTTP API (payload format 2.0), which is what
+  //    infra/lib/api-stack.ts provisions. It differs from the REST API 1.0
+  //    shape, so this is also what catches an adapter/format mismatch.
   const { handler: api } = require(path.join(bundle, 'handler.js'))
   const response = await api(
     {
-      resource: '/{proxy+}',
-      path: '/health',
-      httpMethod: 'GET',
-      headers: { Origin: 'https://not-allowed.example' },
-      multiValueHeaders: { Origin: ['https://not-allowed.example'] },
-      queryStringParameters: null,
-      multiValueQueryStringParameters: null,
+      version: '2.0',
+      routeKey: '$default',
+      rawPath: '/smoke/health',
+      rawQueryString: '',
+      headers: { origin: 'https://not-allowed.example' },
+      requestContext: {
+        accountId: '000000000000',
+        apiId: 'smoke',
+        domainName: 'smoke.execute-api.us-east-1.amazonaws.com',
+        http: {
+          method: 'GET',
+          path: '/smoke/health',
+          protocol: 'HTTP/1.1',
+          sourceIp: '127.0.0.1',
+          userAgent: 'smoke-test',
+        },
+        requestId: 'smoke',
+        routeKey: 'ANY /{proxy+}',
+        stage: 'smoke',
+        time: '01/Jan/2026:00:00:00 +0000',
+        timeEpoch: 1767225600000,
+      },
       pathParameters: { proxy: 'health' },
-      requestContext: { stage: 'smoke', httpMethod: 'GET', path: '/smoke/health', identity: { sourceIp: '127.0.0.1' } },
-      body: null,
       isBase64Encoded: false,
     },
     { callbackWaitsForEmptyEventLoop: false },

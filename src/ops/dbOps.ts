@@ -12,6 +12,9 @@ import { runMigrations } from '../db/migrate'
  *
  *   {"action":"status"}                          applied migrations + row counts
  *   {"action":"migrate"}                         see src/db/migrate.ts
+ *   {"action":"check-isolation"}                 proves this environment's
+ *                                                credentials cannot open the
+ *                                                other environment's database
  *   {"action":"load-data","key":"ops/x.sql"}     one-time load of the historical data
  *   {"action":"create-admin","sub":"…","email":"…","nombre":"…"}
  *
@@ -23,6 +26,7 @@ import { runMigrations } from '../db/migrate'
 type DbOpsEvent =
   | { action: 'status' }
   | { action: 'migrate' }
+  | { action: 'check-isolation' }
   | { action: 'load-data'; key: string }
   | { action: 'create-admin'; sub: string; email: string; nombre: string }
 
@@ -37,6 +41,8 @@ export async function handler(event: DbOpsEvent) {
       return status()
     case 'migrate':
       return runMigrations(pool)
+    case 'check-isolation':
+      return checkIsolation()
     case 'load-data':
       return loadData(event.key)
     case 'create-admin':
@@ -47,9 +53,9 @@ export async function handler(event: DbOpsEvent) {
 }
 
 async function status() {
-  const tracking = await pool.query("SELECT to_regclass('public.schema_migrations') IS NOT NULL AS exists")
+  const tracking = await pool.query("SELECT to_regclass('public._migrations') IS NOT NULL AS exists")
   const migrations = tracking.rows[0].exists
-    ? (await pool.query('SELECT nombre, aplicada_at FROM schema_migrations ORDER BY nombre')).rows
+    ? (await pool.query('SELECT nombre, aplicada_at FROM _migrations ORDER BY nombre')).rows
     : []
 
   const hasSchema = (await pool.query("SELECT to_regclass('public.proyectos') IS NOT NULL AS exists")).rows[0].exists
@@ -60,6 +66,64 @@ async function status() {
     }
   }
   return { migrations, counts }
+}
+
+/**
+ * Prueba, de verdad, que las credenciales de ESTE ambiente no puedan abrir la
+ * base de los otros. No alcanza con haber corrido los REVOKE: esto intenta la
+ * conexión y espera que falle.
+ *
+ * `scripts/db-ops.sh dev check-isolation`
+ */
+async function checkIsolation() {
+  const others = (process.env.OTHER_DATABASES ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  if (!others.length) return { checked: [], note: 'No hay otras bases en este servidor' }
+
+  // Las credenciales salen del mismo lugar que usa la app, así que esto prueba
+  // exactamente lo que pasaría si alguien usara este ambiente para llegar al otro.
+  const { Client } = await import('pg')
+  const checked: { database: string; connected: boolean; error?: string }[] = []
+
+  for (const database of others) {
+    const client = new Client({
+      host: process.env.DB_HOST,
+      port: process.env.DB_PORT ? Number(process.env.DB_PORT) : 5432,
+      database,
+      user: process.env.DB_USER,
+      password: await currentPassword(),
+      ssl: { rejectUnauthorized: false },
+      connectionTimeoutMillis: 10_000,
+    })
+    try {
+      await client.connect()
+      await client.end()
+      checked.push({ database, connected: true })
+    } catch (err) {
+      checked.push({ database, connected: false, error: (err as Error).message })
+    }
+  }
+
+  const leaked = checked.filter((c) => c.connected)
+  if (leaked.length) {
+    throw new Error(
+      `AISLAMIENTO ROTO: ${process.env.DB_USER} pudo conectarse a ${leaked
+        .map((l) => l.database)
+        .join(', ')}`,
+    )
+  }
+  return { ok: true, usuario: process.env.DB_USER, checked }
+}
+
+/** La misma contraseña que usa el pool de la app, desde Secrets Manager. */
+async function currentPassword(): Promise<string> {
+  const arn = process.env.DB_SECRET_ARN
+  if (!arn) return process.env.DB_PASSWORD ?? ''
+  const { GetSecretValueCommand, SecretsManagerClient } = await import(
+    '@aws-sdk/client-secrets-manager'
+  )
+  const sm = new SecretsManagerClient({})
+  const secret = await sm.send(new GetSecretValueCommand({ SecretId: arn }))
+  return (JSON.parse(secret.SecretString ?? '{}') as { password?: string }).password ?? ''
 }
 
 /**

@@ -10,8 +10,10 @@
     "test:lambda": "node scripts/smoke-lambda.cjs",
     "check": "npm run build && npm --prefix infra run build && npm run build:lambda && npm run test:lambda",
     "start": "node dist/src/app.local.js",
-    "migrate": "tsx scripts/migrate.ts",
-    "infra:diff": "cd infra && npm run diff",
+    "db:migrate": "tsx scripts/db-migrate.ts",
+    "db:bootstrap": "tsx scripts/db-bootstrap.ts",
+    "infra:synth": "cd infra && npx cdk synth",
+    "infra:diff": "cd infra && npx cdk diff",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -39,6 +41,7 @@
     "serverless-http": "^4.0.0"
   },
   "devDependencies": {
+    "@aws-sdk/client-lambda": "^3.1133.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^26.5.1",

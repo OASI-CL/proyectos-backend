@@ -1,5 +1,5 @@
 -- ============================================================================
--- OASI - Esquema de base de datos (PostgreSQL, RDS t3.micro)
+-- OASI - Esquema de base de datos (PostgreSQL, RDS db.t4g.micro)
 --
 -- Orden del archivo (de lo más básico a lo que depende de todo lo anterior):
 --   1. Extensiones y trigger de auditoría
@@ -116,6 +116,7 @@ INSERT INTO sectores (id, nombre, orden) VALUES
   ( 9, 'Pesca y Acuicultura',              9),
   (10, 'Instalaciones fabriles varias',   10),
   (11, 'Otro',                            99);
+
 
 SELECT setval('sectores_id_seq', (SELECT max(id) FROM sectores));
 
@@ -279,7 +280,7 @@ CREATE TABLE proyectos (
   fecha_inicio_operacion      DATE,
   habilitantes_aprobado       BOOLEAN,               -- '¿Habilitantes Aprobado?'
   fecha_ingreso               DATE,                  -- ingreso del proyecto al universo OASI
-  fecha_ultima_resolucion     DATE,
+  fecha_ultima_resolucion     DATE,  -- sacarla
   observaciones_oasi          TEXT,
   estado_validacion           TEXT NOT NULL DEFAULT 'validado'
                                 CHECK (estado_validacion IN ('borrador', 'en_revision', 'validado')),

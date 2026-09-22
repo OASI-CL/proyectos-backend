@@ -13,7 +13,7 @@
 source "$(dirname "$0")/lib.sh"
 APP_ID="${1:?Usage: $0 <amplify-app-id> <branch> <dev|prod>}"
 BRANCH="${2:?Usage: $0 <amplify-app-id> <branch> <dev|prod>}"
-require_stage "${3:-}"
+require_env "${3:-}"
 STAGE="$3"
 
 API_URL="$(stack_output "Oasi-${STAGE}" ApiUrl)"

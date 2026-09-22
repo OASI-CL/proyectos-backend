@@ -15,7 +15,7 @@
 # temp file is deleted on exit. It never touches git.
 #
 source "$(dirname "$0")/lib.sh"
-require_stage "${1:-}"
+require_env "${1:-}"
 STAGE="$1"
 
 cd "$(dirname "$0")/.."
@@ -56,7 +56,7 @@ pg_dump -h "$DB_HOST" -p "${DB_PORT:-5432}" -U "$DB_USER" -d "$DB_NAME" \
 
 echo "    $(grep -c '^INSERT INTO' "$DUMP") rows, $(du -h "$DUMP" | cut -f1)"
 
-BUCKET="$(stack_output "Oasi-${STAGE}" AttachmentsBucket)"
+BUCKET="$(stack_output "Oasi-Storage-${STAGE}" BucketName)"
 KEY="ops/data-$(date +%Y%m%d%H%M%S).sql"
 
 echo "==> Uploading to s3://${BUCKET}/${KEY}"

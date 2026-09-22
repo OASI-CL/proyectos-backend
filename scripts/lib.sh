@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Shared helpers for the scripts/*.sh that operate a deployed environment.
-# Sourced, not executed.
+# Helpers compartidos por los scripts que operan un ambiente desplegado.
+# Se incluye con `source`, no se ejecuta.
 
 set -euo pipefail
 
-require_stage() {
+require_env() {
   case "${1:-}" in
     dev|prod) ;;
-    *) echo "Usage: $0 <dev|prod> ..." >&2; exit 2 ;;
+    *) echo "Uso: $0 <dev|prod> ..." >&2; exit 2 ;;
   esac
 }
 
@@ -17,16 +17,15 @@ stack_output() {
     --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
 }
 
-# invoke_db_ops <stage> <json-payload>
-# Prints the function's JSON result; exits non-zero if the function failed.
+# invoke_db_ops <env> <json>
+# Imprime el resultado de la Lambda; termina con error si la Lambda falló.
 invoke_db_ops() {
-  local stage="$1" payload="$2" out
+  local env="$1" payload="$2" out meta
   out="$(mktemp)"
   trap 'rm -f "$out"' RETURN
 
-  local meta
   meta="$(aws lambda invoke \
-    --function-name "oasi-${stage}-db-ops" \
+    --function-name "oasi-db-ops-${env}" \
     --cli-binary-format raw-in-base64-out \
     --cli-read-timeout 330 \
     --payload "$payload" \
@@ -34,7 +33,7 @@ invoke_db_ops() {
 
   cat "$out"; echo
   if echo "$meta" | grep -q '"FunctionError"'; then
-    echo "db-ops failed (details above; full log in CloudWatch /aws/lambda/oasi-${stage}-db-ops)" >&2
+    echo "db-ops falló (detalle arriba; log completo en CloudWatch /aws/lambda/oasi-db-ops-${env})" >&2
     return 1
   fi
 }

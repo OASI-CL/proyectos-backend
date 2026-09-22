@@ -12,12 +12,19 @@
 # (Administración → Usuarios).
 #
 source "$(dirname "$0")/lib.sh"
-require_stage "${1:-}"
+require_env "${1:-}"
 STAGE="$1"
-EMAIL="${2:?Usage: $0 <dev|prod> <email> \"<nombre>\"}"
-NOMBRE="${3:?Usage: $0 <dev|prod> <email> \"<nombre>\"}"
+EMAIL="${2:?Uso: $0 <dev|prod> <email> \"<nombre>\"}"
+NOMBRE="${3:?Uso: $0 <dev|prod> <email> \"<nombre>\"}"
 
-POOL="$(stack_output "Oasi-Auth-${STAGE}" UserPoolId)"
+cd "$(dirname "$0")/.."
+
+# El pool puede venir de config.ts (ambiente que reusa uno existente, como
+# dev) o del stack que lo creó (prod).
+POOL="$(npx tsx -e "import {CONFIG} from './infra/config'; process.stdout.write(CONFIG.${STAGE}.cognito.existingUserPoolId ?? '')" 2>/dev/null)"
+if [ -z "$POOL" ]; then
+  POOL="$(stack_output "Oasi-Auth-${STAGE}" UserPoolId)"
+fi
 echo "==> User pool ${POOL}"
 
 if aws cognito-idp admin-get-user --user-pool-id "$POOL" --username "$EMAIL" >/dev/null 2>&1; then

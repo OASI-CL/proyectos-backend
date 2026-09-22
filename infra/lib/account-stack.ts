@@ -2,7 +2,7 @@ import * as cdk from 'aws-cdk-lib'
 import { Construct } from 'constructs'
 import * as budgets from 'aws-cdk-lib/aws-budgets'
 import * as iam from 'aws-cdk-lib/aws-iam'
-import { ACCOUNT, STAGES, type Stage } from './config'
+import { ACCOUNT, CONFIG, type EnvName } from '../config'
 
 /**
  * Account-wide pieces, shared by both environments. Deployed ONCE, by hand,
@@ -28,7 +28,7 @@ export class AccountStack extends cdk.Stack {
       clientIds: ['sts.amazonaws.com'],
     })
 
-    for (const stage of Object.keys(STAGES) as Stage[]) {
+    for (const stage of Object.keys(CONFIG) as EnvName[]) {
       const role = new iam.Role(this, `DeployRole-${stage}`, {
         roleName: `oasi-github-deploy-${stage}`,
         description: `GitHub Actions deploys OASI ${stage} (${ACCOUNT.githubOrg}/${ACCOUNT.githubRepo}, environment ${stage})`,
@@ -61,11 +61,13 @@ export class AccountStack extends cdk.Stack {
       )
 
       // After deploying, the workflow runs the database migrations through
-      // this environment's db-ops Lambda (see oasi-stack.ts).
+      // this environment's db-ops Lambda (see lib/api-stack.ts). Note it is
+      // NOT allowed to invoke oasi-db-bootstrap: that one holds the master
+      // credentials and can reach both environments, so it stays manual.
       role.addToPolicy(
         new iam.PolicyStatement({
           actions: ['lambda:InvokeFunction'],
-          resources: [`arn:aws:lambda:${this.region}:${this.account}:function:oasi-${stage}-db-ops`],
+          resources: [`arn:aws:lambda:${this.region}:${this.account}:function:oasi-db-ops-${stage}`],
         }),
       )
 
