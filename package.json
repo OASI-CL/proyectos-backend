@@ -15,6 +15,7 @@
     "db:check": "tsx scripts/db.ts check",
     "db:bootstrap": "tsx scripts/db.ts bootstrap",
     "db:baseline": "tsx scripts/db.ts baseline",
+    "db:wipe": "tsx scripts/db.ts wipe",
     "infra:synth": "cd infra && npx cdk synth",
     "infra:diff": "cd infra && npx cdk diff",
     "test": "echo \"Error: no test specified\" && exit 1",

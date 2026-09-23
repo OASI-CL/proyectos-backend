@@ -55,7 +55,7 @@ jobs:
 
       - name: Sintetizar CloudFormation
         working-directory: infra
-        run: npx cdk synth --context env=dev --quiet
+        run: npx cdk synth --quiet
 
       - uses: actions/upload-artifact@v4
         if: github.event_name != 'pull_request'
@@ -101,11 +101,17 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Se nombran los stacks de este ambiente explícitamente (nunca --all):
+      # la app de CDK siempre define los ocho stacks de los dos ambientes
+      # (necesario para que las referencias entre stacks compartidos, como
+      # Oasi-Database, se resuelvan bien — ver el comentario en bin/app.ts),
+      # así que lo único que impide que un deploy de dev toque prod es no
+      # nombrar sus stacks acá.
       - name: cdk deploy
         working-directory: infra
         run: |
-          npx cdk deploy --all \
-            --context env=${{ env.ENVIRONMENT }} \
+          npx cdk deploy \
+            Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage-dev Oasi-Api-dev \
             --require-approval never \
             --outputs-file outputs.json
 

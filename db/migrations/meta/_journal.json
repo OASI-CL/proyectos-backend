@@ -36,6 +36,13 @@
       "when": 1790045318133,
       "tag": "0004_alinear_nombres_fk",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1790094504058,
+      "tag": "0005_columnas_excel_2026_09_22",
+      "breakpoints": true
     }
   ]
 }

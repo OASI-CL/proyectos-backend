@@ -16,6 +16,10 @@ import { baselineMigrations, runMigrations } from '../db/migrate'
  *                                                credentials cannot open the
  *                                                other environment's database
  *   {"action":"load-data","key":"ops/x.sql"}     one-time load of the historical data
+ *   {"action":"wipe-data","confirm":true}        DESTRUCTIVE: empties every data
+ *                                                table (not catalogs, not
+ *                                                usuarios) so load-data can
+ *                                                run again from scratch
  *   {"action":"create-admin","sub":"…","email":"…","nombre":"…"}
  *
  * Wrapped by npm run db:* (scripts/db.ts), scripts/load-data.sh, scripts/create-admin.sh.
@@ -29,6 +33,7 @@ type DbOpsEvent =
   | { action: 'baseline'; hasta: string }
   | { action: 'check-isolation' }
   | { action: 'load-data'; key: string }
+  | { action: 'wipe-data'; confirm: boolean }
   | { action: 'create-admin'; sub: string; email: string; nombre: string }
 
 /** Tables the historical data load fills. Catalogs come with the migrations. */
@@ -48,6 +53,8 @@ export async function handler(event: DbOpsEvent) {
       return checkIsolation()
     case 'load-data':
       return loadData(event.key)
+    case 'wipe-data':
+      return wipeData(event.confirm)
     case 'create-admin':
       return createAdmin(event)
     default:
@@ -64,7 +71,7 @@ async function status() {
   const hasSchema = (await pool.query("SELECT to_regclass('public.proyectos') IS NOT NULL AS exists")).rows[0].exists
   const counts: Record<string, number> = {}
   if (hasSchema) {
-    for (const table of [...DATA_TABLES, 'usuarios']) {
+    for (const table of [...DATA_TABLES, 'usuarios', 'adjuntos', 'historial', 'solicitudes_cambio']) {
       counts[table] = (await pool.query(`SELECT count(*)::int AS n FROM public.${table}`)).rows[0].n
     }
   }
@@ -138,6 +145,54 @@ async function currentPassword(): Promise<string> {
  * The dump is deleted from S3 afterwards, whatever the outcome — it holds
  * private data and has no reason to outlive the load.
  */
+/** Orden de borrado: hijos antes que padres. */
+const WIPE_TABLES = ['permisos_comite', 'adjuntos', 'permisos', 'proyectos', 'empresas', 'comites']
+
+/**
+ * Vacía las tablas de datos (no los catálogos, no `usuarios`) para poder
+ * correr `load-data` de nuevo sobre un ambiente que ya tenía algo cargado.
+ *
+ * DELETE en orden de dependencia, nunca TRUNCATE ... CASCADE: CASCADE de
+ * TRUNCATE se lleva puesta CUALQUIER tabla que tenga una FK apuntando a la
+ * que se vacía, sin importar si hay filas relacionadas de verdad — vació
+ * `usuarios` (que solo tiene una FK hacia `empresas`) la primera vez que
+ * corrió esto, borrando el admin de dev por accidente. DELETE en orden
+ * respeta las FK y, si algo externo referencia una fila real (por ejemplo
+ * un usuario con `empresa_id` apuntando a una empresa que se está por
+ * borrar), Postgres corta con un error en vez de arrasar en silencio.
+ *
+ * No toca `historial` ni `solicitudes_cambio`: no tienen FK real a
+ * proyectos/permisos (`entidad_id` es polimórfico — ver
+ * `src/db/schema/historial.ts`), así que un wipe no las puede arrastrar ni
+ * en cascada ni por error; si tuvieran filas de antes, quedan huérfanas.
+ *
+ * Se exige `confirm: true` a propósito: no es algo que deba dispararse por
+ * accidente.
+ */
+async function wipeData(confirm: boolean) {
+  if (!confirm) {
+    throw new Error(
+      'Pasá {"action":"wipe-data","confirm":true} para confirmar. ' +
+        'Esto borra TODOS los proyectos, permisos, empresas, comités y sus vínculos de este ambiente.',
+    )
+  }
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    for (const table of WIPE_TABLES) {
+      await client.query(`DELETE FROM ${table}`)
+      await client.query(`SELECT setval(pg_get_serial_sequence('public.${table}', 'id'), 1, false)`)
+    }
+    await client.query('COMMIT')
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined)
+    throw err
+  } finally {
+    client.release()
+  }
+  return status()
+}
+
 async function loadData(key: string) {
   if (!key?.startsWith('ops/')) throw new Error('key must be under ops/')
 

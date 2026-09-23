@@ -135,11 +135,17 @@ Una sola vez por cuenta (ya está hecho): `npx cdk bootstrap` dentro de `infra/`
 
 ## Cómo desplegar
 
+La app de CDK define los **ocho stacks de los dos ambientes a la vez**,
+siempre (ver el comentario en `bin/app.ts`: es necesario para que las
+referencias entre stacks compartidos, como `Oasi-Database`, se resuelvan
+bien). Lo que decide qué se toca es a cuáles stacks se les pasa el **nombre**
+en el comando — nunca `--all`, que tocaría los dos ambientes de una.
+
 Antes de cualquier deploy conviene mirar qué va a cambiar:
 
 ```bash
 cd infra
-npx cdk diff --all --context env=dev     # no toca nada, solo compara
+npx cdk diff Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage-dev Oasi-Api-dev     # dev
 ```
 
 Desplegar:
@@ -150,16 +156,12 @@ cd proyectos-backend
 npm run check
 
 cd infra
-npx cdk deploy --all --context env=dev     # dev
-npx cdk deploy --all --context env=prod    # prod
+npx cdk deploy Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage-dev Oasi-Api-dev      # dev
+npx cdk deploy Oasi-Network Oasi-Database Oasi-Auth-prod Oasi-Storage-prod Oasi-Api-prod   # prod
 ```
 
-`--context env=dev` deja fuera de la app los stacks de prod, así que un
-`--all` de dev no puede tocar producción (y viceversa).
-
-`Oasi-Account` queda fuera cuando se usa `--context env=...`, a propósito:
-define los permisos con los que corre el CI, así que se despliega aparte y a
-mano:
+`Oasi-Account` define los permisos con los que corre el CI, así que se
+despliega aparte y a mano — nunca se lo nombra junto con los demás:
 
 ```bash
 npx cdk deploy Oasi-Account
@@ -173,7 +175,7 @@ despliega dev y un merge a `main` despliega prod (ver "CI/CD").
 ```bash
 cd proyectos-backend
 npm run check
-cd infra && npx cdk deploy --all --context env=dev && cd ..
+cd infra && npx cdk deploy Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage-dev Oasi-Api-dev && cd ..
 
 npm run db:bootstrap                  # crea bases, usuarios y permisos
 npm run db:migrate -- --env=dev       # crea las tablas
@@ -284,7 +286,7 @@ con pgAdmin o DBeaver desde tu PC.
    publiclyAccessible: true,              // de false a true
    allowedDbIps: ['190.100.20.30/32'],    // tu IP, con /32 al final
    ```
-3. `cd infra && npx cdk deploy Oasi-Network Oasi-Database --context env=dev`
+3. `cd infra && npx cdk deploy Oasi-Network Oasi-Database`
 
 El `/32` significa "exactamente esta IP". Si la conexión de tu casa cambia de
 IP (lo normal), hay que actualizarla.
@@ -319,7 +321,7 @@ borrar nada.
    primera vez), CloudFormation no lo deja actualizar: hay que borrarlo y
    crearlo de nuevo.
    ```bash
-   npx cdk destroy Oasi-Api-dev --context env=dev
+   npx cdk destroy Oasi-Api-dev
    ```
 
 4. Si falla el paso de migraciones (no el de CloudFormation), la
@@ -350,7 +352,21 @@ la letra al id en `lib/network-stack.ts`
 `Oasi-Network`. El user data solo corre en el primer arranque, así que
 reiniciar la máquina no vuelve a configurarla.
 
-### Dos errores que ya nos pasaron, para no perder tiempo de nuevo
+### Tres errores que ya nos pasaron, para no perder tiempo de nuevo
+
+**"Cannot delete export ... as it is in use by Oasi-Api-dev" al desplegar
+`Oasi-Database`.** Pasaba cuando se desplegaba un ambiente nombrando solo sus
+stacks con `--context env=X` filtrando cuáles existían en la app de CDK: al
+desplegar "solo prod", el programa no sabía que `Oasi-Api-dev` seguía
+existiendo de verdad y usando un secreto de la base compartida, CDK daba de
+baja esa exportación, y CloudFormation frenaba todo (confirmado mirando el
+evento real en CloudTrail). Se solucionó sacando el filtro: la app de CDK
+ahora define los ocho stacks de los dos ambientes siempre; lo que decide qué
+se toca es a cuáles stacks se les pasa el nombre en `cdk deploy`, nunca
+`--all`. Si ves este error, alguien volvió a introducir un filtro por
+contexto en `bin/app.ts`.
+
+**Dos errores más, del arranque de la infraestructura:**
 
 **"An internal error has occurred (Service: Ec2, Status Code: 500)" al crear
 `VpcprivateSubnetNDefaultRoute`.** Pasa cuando la ruta apunta al **id de la
@@ -363,6 +379,16 @@ día alguien "simplifica" eso volviendo al provider, este error vuelve.
 **No se puede borrar una base de datos detenida.** Si un `cdk destroy` se
 queda en `DELETE_IN_PROGRESS` durante mucho rato, es casi seguro eso:
 prendela con `aws rds start-db-instance` y la eliminación sigue sola.
+
+**`TRUNCATE ... CASCADE` no hace lo que parece.** `npm run db:wipe` (vacía
+proyectos/permisos para recargar datos nuevos) usaba `TRUNCATE ... CASCADE`
+la primera vez, y de paso vació `usuarios` — esa tabla no tiene datos que
+seguir en cascada, pero tiene una FK *apuntando a* `empresas`, y CASCADE de
+TRUNCATE arrastra CUALQUIER tabla con una FK hacia la que se vacía, sin
+importar si hay filas relacionadas de verdad. Se cambió a `DELETE FROM` en
+orden de dependencia (`src/ops/dbOps.ts`, `wipeData`): hace lo mismo pero,
+si algo externo referencia una fila real, Postgres corta con un error en vez
+de arrasar en silencio.
 
 ---
 
@@ -459,18 +485,18 @@ El servidor de base de datos tiene **protección de borrado** y política
 cd proyectos-backend/infra
 
 # 1. Lo que se borra sin ceremonia
-npx cdk destroy Oasi-Api-dev Oasi-Storage-dev --context env=dev
-npx cdk destroy Oasi-Api-prod Oasi-Storage-prod Oasi-Auth-prod --context env=prod
+npx cdk destroy Oasi-Api-dev Oasi-Storage-dev
+npx cdk destroy Oasi-Api-prod Oasi-Storage-prod Oasi-Auth-prod
 
 # 2. La base: hay que sacarle la protección primero
 aws rds modify-db-instance --db-instance-identifier oasi-shared \
   --no-deletion-protection --apply-immediately
 aws rds delete-db-instance --db-instance-identifier oasi-shared \
   --final-db-snapshot-identifier oasi-final-$(date +%Y%m%d)   # deja respaldo
-npx cdk destroy Oasi-Database --context env=dev
+npx cdk destroy Oasi-Database
 
 # 3. La red (tiene que ir después: la base vive adentro)
-npx cdk destroy Oasi-Network --context env=dev
+npx cdk destroy Oasi-Network
 ```
 
 Ojo con estos detalles, que muerden:

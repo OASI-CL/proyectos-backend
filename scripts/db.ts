@@ -23,7 +23,7 @@ import { InvokeCommand, LambdaClient } from '@aws-sdk/client-lambda'
  * ============================================================================
  */
 
-type Comando = 'migrate' | 'status' | 'check' | 'bootstrap' | 'baseline'
+type Comando = 'migrate' | 'status' | 'check' | 'bootstrap' | 'baseline' | 'wipe'
 type Ambiente = 'local' | 'dev' | 'prod'
 
 const USO = `Uso:
@@ -33,7 +33,10 @@ const USO = `Uso:
   npm run db:bootstrap
   npm run db:baseline -- --env=local --hasta=002_catalogos.sql
       (solo para una base que ya tiene ese estado y no tiene historial:
-       marca como aplicadas las migraciones hasta ese archivo, sin correrlas)`
+       marca como aplicadas las migraciones hasta ese archivo, sin correrlas)
+  npm run db:wipe -- --env=dev|prod --confirm
+      (DESTRUCTIVO: vacía proyectos/permisos/empresas/comités de ese ambiente,
+       para poder cargar datos nuevos desde cero con scripts/load-data.sh)`
 
 const comando = process.argv[2] as Comando | undefined
 const ambiente = process.argv.slice(3).find((a) => a.startsWith('--env='))?.split('=')[1] as
@@ -116,6 +119,15 @@ async function main() {
     // Sin --env: crea de una vez las bases y los usuarios de TODOS los
     // ambientes, porque los permisos cruzados necesitan que todas existan.
     // Es la única Lambda con la credencial maestra del servidor.
+    case 'wipe': {
+      const confirmar = process.argv.slice(3).includes('--confirm')
+      if (!confirmar) {
+        console.error(`Falta --confirm. Esto borra los datos de ${ambiente ?? '<env>'} sin vuelta atrás.\n\n${USO}`)
+        process.exit(2)
+      }
+      return invocar(`oasi-db-ops-${exigirAmbienteAws()}`, { action: 'wipe-data', confirm: true })
+    }
+
     case 'bootstrap':
       return invocar('oasi-db-bootstrap', {})
 

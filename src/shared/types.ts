@@ -35,9 +35,9 @@ export type RolUsuario = 'admin' | 'oasi' | 'organismo' | 'empresa' | 'region'
  * `EstadoPermisoCodigo` is the stable machine-readable key (`estado_codigo`
  * on the views) — prefer it over the display name in new code.
  */
-export type EstadoPermiso = 'Pendiente' | 'Resuelto' | 'Descartado'
+export type EstadoPermiso = 'Pendiente' | 'Resuelto' | 'Descartado' | 'Desistido'
 
-export type EstadoPermisoCodigo = 'pendiente' | 'resuelto' | 'descartado'
+export type EstadoPermisoCodigo = 'pendiente' | 'resuelto' | 'descartado' | 'desistido'
 
 export type EtapaProyectoCodigo = 'no_iniciado' | 'construccion' | 'operacion'
 
@@ -117,6 +117,13 @@ export interface Sector {
   orden: number
 }
 
+/** Subclasificación dentro de un sector (catálogo `tipologias`, 71 filas). */
+export interface Tipologia {
+  id: number
+  sector_id: number
+  nombre: string
+}
+
 export interface EtapaProyecto {
   id: number
   codigo: EtapaProyectoCodigo
@@ -148,6 +155,8 @@ export interface Proyecto extends Auditoria {
   empresa_id: number
   region_id: number | null
   sector_id: number | null
+  /** Subclasificación dentro del sector (catálogo `tipologias`). Sin usar aún: 0/326 proyectos la traen. */
+  tipologia_id: number | null
   etapa_id: number | null
   inversion_mmusd: number | null
   empleo_construccion: number | null
@@ -160,6 +169,15 @@ export interface Proyecto extends Auditoria {
   fecha_ultima_resolucion: string | null
   observaciones_oasi: string | null
   estado_validacion: EstadoValidacion
+  /** 1 o 2 en el Excel origen. Significado exacto sin confirmar con OASI. */
+  n_catastro: number | null
+  /** Catastro de Hacienda a nivel proyecto (distinto de `Permiso.incluido_catastro_hacienda`, que es por permiso). */
+  incluido_en_catastro: boolean | null
+  /** Si el proyecto está dentro del universo de seguimiento activo de OASI. */
+  en_universo_permisos: boolean | null
+  sigue_liberado_al_contactar: boolean | null
+  listado_37_proyectos_liberados: boolean | null
+  listado_97_proyectos_no_iniciados: boolean | null
 }
 
 // --- Permisos -----------------------------------------------------------------
@@ -186,6 +204,15 @@ export interface Permiso extends Auditoria {
   n_catastro: string | null
   observaciones: string | null
   estado_validacion: EstadoValidacion
+  /** Si el permiso está dentro del universo de seguimiento activo de OASI. */
+  en_universo: boolean | null
+  fecha_registro_catastro: string | null
+  /**
+   * Cuándo y quién lo actualizó por última vez EN LA PLANILLA origen (no es
+   * `updated_at`/`updated_by`, que pone el trigger cuando se edita desde la app).
+   */
+  fecha_actualizacion: string | null
+  quien_actualizo: string | null
 }
 
 // --- Comités -------------------------------------------------------------------
@@ -338,16 +365,23 @@ export interface VProyecto extends Proyecto {
 }
 
 /**
- * v_permisos_comite: lo mismo que v_permisos pero a la fecha del comité.
- * No trae `semaforo` ni `estado_es_final` (son relativos a CURRENT_DATE).
+ * v_permisos_comite: la tabla de un comité es ACUMULATIVA Y ESTRICTA — los
+ * permisos que entraron en comités con número MENOR a `comite_numero`, no
+ * los vinculados a esa sesión. No trae `semaforo` ni `estado_es_final` (son
+ * relativos a CURRENT_DATE, acá todo es a la fecha de la sesión).
  */
 export interface VPermisoComite extends Omit<VPermiso, 'semaforo' | 'estado_es_final'> {
+  /** La sesión que se está mirando. */
   comite_id: number
   comite_numero: number
   comite_fecha: string
+  /** La sesión en la que el permiso entró (siempre menor que comite_numero). */
+  comite_ingreso_numero: number
   compromiso: string | null
-  /** Estado reconstruido a la fecha de la sesión (o el snapshot guardado). */
+  /** Estado que tenía el permiso el día de esa sesión. */
   estado_a_la_fecha: EstadoPermiso
+  /** true si ese día ya estaba resuelto/descartado/desistido. */
+  finalizado_a_la_fecha: boolean
 }
 
 export interface VResumenComite {
