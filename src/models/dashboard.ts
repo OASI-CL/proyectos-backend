@@ -208,6 +208,7 @@ export interface DashboardData {
   projectsBySector: Record<string, unknown>[]
   rcaStatus: Record<string, unknown>[]
   timeline: Record<string, unknown>[]
+  mapProjects: Record<string, unknown>[]
   monitor: Record<string, unknown>[]
   permitsByAgency: Record<string, unknown>[]
   permitsByRegion: Record<string, unknown>[]
@@ -230,6 +231,7 @@ export async function fetchDashboard(
     projectsBySector,
     rcaStatus,
     timeline,
+    mapProjects,
     monitor,
     permitsByAgency,
     permitsByRegion,
@@ -295,6 +297,14 @@ export async function fetchDashboard(
       FROM projects
       WHERE construction_start_on IS NOT NULL
       ORDER BY construction_start_on
+    `),
+
+    // --- Map: one row per project. Only region is known (no coordinates);
+    // the frontend places each dot inside its region. ---
+    run(`
+      SELECT id, id_excel, name, company_name, sector, region, project_status, investment_mmusd
+      FROM projects
+      ORDER BY investment_mmusd DESC NULLS LAST
     `),
 
     // --- 5. "Monitor projects" banner ---
@@ -421,6 +431,7 @@ export async function fetchDashboard(
     projectsBySector: projectsBySector.rows,
     rcaStatus: rcaStatus.rows,
     timeline: timeline.rows,
+    mapProjects: mapProjects.rows,
     monitor: monitor.rows,
     permitsByAgency: permitsByAgency.rows,
     permitsByRegion: permitsByRegion.rows,

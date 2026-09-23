@@ -72,6 +72,7 @@ router.get('/', async (req, res, next) => {
       projectsBySector: camelizeRows(data.projectsBySector),
       rcaStatus: camelizeRows(data.rcaStatus),
       timeline: camelizeRows(data.timeline),
+      mapProjects: camelizeRows(data.mapProjects),
       monitor: { upcoming: bucket('upcoming'), fewPermits: bucket('few_permits') },
       permitsByAgency: camelizeRows(data.permitsByAgency),
       permitsByRegion: camelizeRows(data.permitsByRegion),
