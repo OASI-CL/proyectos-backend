@@ -117,6 +117,38 @@ con un remitente `@economia.cl`. Es un cambio en `lib/auth-stack.ts`
 
 ---
 
+## Diseño de los correos
+
+Invitación (cuenta nueva + contraseña temporal) y recuperación de contraseña
+tienen un HTML propio: logo del Ministerio, franja de colores del Gobierno,
+recuadro con la contraseña o el código, y botón "Ingresar a OASI" que lleva a
+la app de ese ambiente (`appUrl` en `config.ts`).
+
+- Plantillas: **`lib/correos.ts`** (única fuente).
+- **prod**: las aplica CDK -> `cd infra && npx cdk deploy Oasi-Auth-prod`.
+- **dev**: el pool es viejo y CDK no lo maneja ->
+  `AWS_PROFILE=oasi npx tsx scripts/correos-cognito.ts --env=dev`.
+
+### Si el correo llega "sin formato" o a Correo no deseado
+
+Outlook convierte a **texto plano** (sin colores, logo ni botón) todo lo que
+cae en "Correo no deseado", y avisa arriba: *"Este mensaje se ha convertido a
+texto sin formato"*. No es la plantilla: es el remitente. Cognito manda por
+defecto desde `no-reply@verificationemail.com`, que los filtros del
+Exchange de `economia.cl` marcan como spam.
+
+Dos arreglos, los dos requieren a TI del ministerio:
+
+1. **Rápido**: que TI agregue `no-reply@verificationemail.com` a la lista de
+   remitentes seguros del Exchange.
+2. **Definitivo**: mandar desde una casilla propia (ej.
+   `no-responder@economia.cl`) con SES. Requiere que TI publique en el DNS de
+   `economia.cl` los registros DKIM/SPF que da SES, y cambiar
+   `email: cognito.UserPoolEmail.withSES(...)` en `lib/auth-stack.ts`. De paso
+   saca el tope de 50 correos por día.
+
+---
+
 ## Contraseñas
 
 Política del pool: mínimo 12 caracteres, con mayúscula, minúscula, número y

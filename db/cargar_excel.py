@@ -423,8 +423,9 @@ def armar(wb):
             continue
 
         org = texto(f["organismo"])
+        org = cat.ORGANISMO_ALIAS.get(org, org)
         if org not in organismos:
-            raise PlanillaInvalida(f"{cod}: el organismo '{org}' no está en el catálogo (db/seed_catalogos.py, ORGANISMOS).")
+            raise PlanillaInvalida(f"{cod}: el organismo '{org}' no está en el catálogo (db/seed_catalogos.py, ORGANISMOS / ORGANISMO_ALIAS).")
 
         estado = texto(f["estado"]) or "Pendiente"
         if estado not in estados:

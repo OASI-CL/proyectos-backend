@@ -88,6 +88,12 @@ export interface EnvConfig {
    */
   frontendOrigins: string[]
 
+  /**
+   * La URL de la app para este ambiente: es el botón "Ingresar a OASI" de los
+   * correos de Cognito (invitación y recuperación, ver lib/correos.ts).
+   */
+  appUrl: string
+
   /** Id de la app de Amplify, después de crearla en la consola. */
   amplifyAppId?: string
 
@@ -191,6 +197,8 @@ export const CONFIG: Record<EnvName, EnvConfig> = {
       existingUserPoolClientId: '46cb3he4cbplji8chmj066vud6',
     },
 
+    appUrl: 'https://develop.dyfx5stqf038v.amplifyapp.com',
+
     frontendOrigins: [
       // Permite correr el frontend en tu PC contra la API de dev desplegada
       // (npm run dev:aws en proyectos-frontend).
@@ -217,6 +225,8 @@ export const CONFIG: Record<EnvName, EnvConfig> = {
 
     // prod todavía no tiene User Pool: el stack Oasi-Auth-prod lo crea.
     cognito: {},
+
+    appUrl: 'https://main.dyfx5stqf038v.amplifyapp.com',
 
     frontendOrigins: [
       // Rama main de la app de Amplify.

@@ -52,6 +52,12 @@ MINISTERIOS = [
     (10, "Ministerio de Vivienda y Urbanismo", "MINVU"),
     (11, "Ministerio de las Culturas, las Artes y el Patrimonio", "MINCAP"),
     (12, "Municipalidades", None),
+    # No es un ministerio real: agrupa a los Gobiernos Regionales, que
+    # administrativamente dependen de la Subsecretaría de Desarrollo Regional
+    # (Ministerio del Interior), no de un ministerio sectorial. Mismo criterio
+    # que "Municipalidades" arriba: un balde para organismos que no encajan
+    # en la estructura ministerial sectorial.
+    (13, "Gobiernos Regionales", None),
 ]
 
 # --- ORGANISMOS: (id, sigla, nombre largo, ministerio) ---------------------
@@ -77,7 +83,20 @@ ORGANISMOS = [
     (17, "SERNAGEOMIN", "Servicio Nacional de Geología y Minería", "Ministerio de Minería"),
     (18, "SSFFAA", "Subsecretaría para las Fuerzas Armadas", "Ministerio de Defensa Nacional"),
     (19, "VIALIDAD", "Dirección de Vialidad", "Ministerio de Obras Públicas"),
+    (20, "EFE", "Empresa de los Ferrocarriles del Estado", "Ministerio de Transportes y Telecomunicaciones"),
+    (21, "GORE BIOBÍO", "Gobierno Regional del Biobío", "Gobiernos Regionales"),
 ]
+
+# Cómo escribe la planilla algunos organismos -> sigla en el catálogo.
+# cargar_excel.py lo usa para la columna "organismo" de Permisos, igual que
+# SECTOR_ALIAS para sectores.
+ORGANISMO_ALIAS = {
+    "Empresa de los Ferrocarriles del Estado (EFE)": "EFE",
+    # El permiso PM1754 trae dos organismos en la misma celda (autorización
+    # de pago que depende del GORE, gatillada por una resolución del SSBB).
+    # Se decidió (24-09-2026) que el organismo tramitador real es el GORE.
+    "Gobierno Regional del Biobío (GORE) / Servicio de Salud Biobío (SSBB)": "GORE BIOBÍO",
+}
 
 # --- REGIONES: (id, numero oficial, numeral, nombre, nombre oficial) -------
 # id = orden norte -> sur (el orden en que se muestran). 90 y 91 no son
