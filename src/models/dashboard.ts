@@ -166,6 +166,7 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
         p.fecha_resolucion           AS resolved_on,
         p.dias_tramitacion           AS days_in_process,
         p.critico                    AS is_critical,
+        p.habilitante_construccion,
         (${PERMIT_TRACKING_STATUS_SQL}) AS tracking_status,
         (${OVERDUE_DAYS_SQL})           AS overdue_days
       FROM v_permisos p
@@ -394,17 +395,20 @@ export async function fetchDashboard(
       GROUP BY 1
     `),
 
-    // --- 11. Critical permits ---
+    // --- 11. Overdue permits that enable construction ---
     //
-    // Criticality is not just "overdue": an overdue permit blocking a
-    // project whose construction starts soon matters more. Those come
-    // first, then the longest overdue.
+    // Restricted to habilitante_construccion (the only real "this one
+    // matters more" flag OASI has — `critico` is a separate column that
+    // comes 100% empty from the source spreadsheet, so it's never used to
+    // decide priority). Among those, one blocking a project whose
+    // construction starts soon matters more; those come first, then the
+    // longest overdue.
     run(`
       SELECT
         pm.id, pm.id_excel, pm.name, pm.agency_name AS agency,
         pm.project_id, pm.project_name, pm.company_name,
         pm.tracking_status, pm.overdue_days, pm.days_in_process,
-        pm.expected_resolution_on, pm.investment_mmusd, pm.is_critical,
+        pm.expected_resolution_on, pm.investment_mmusd,
         pj.construction_start_on,
         CASE
           WHEN pj.construction_start_on IS NOT NULL
@@ -413,7 +417,7 @@ export async function fetchDashboard(
         END AS priority
       FROM permits pm
       JOIN projects pj ON pj.id = pm.project_id
-      WHERE pm.tracking_status = 'overdue'
+      WHERE pm.tracking_status = 'overdue' AND pm.habilitante_construccion IS TRUE
       ORDER BY
         CASE
           WHEN pj.construction_start_on IS NOT NULL
