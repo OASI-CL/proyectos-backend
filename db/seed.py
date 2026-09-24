@@ -297,14 +297,46 @@ def read_comites(wb):
 def read_proyectos(wb):
     ws = wb["Proyectos"]
     rows = read_sheet_by_header(ws, PROYECTOS_COLS)
+
+    # Primera pasada: mapa nombre normalizado -> id_empresa real, de las filas
+    # que sí traen los dos. Así, si CODELCO tiene id_empresa en una fila pero
+    # no en otra, las dos quedan bajo el mismo id real en vez de la segunda
+    # generando una fila de empresa nueva y separada para el mismo nombre.
+    nombre_a_id = {}
+    for row in rows:
+        id_empresa_raw = clean_text(row.get("id_empresa"))
+        nombre_empresa_raw = clean_text(row.get("empresa"))
+        if id_empresa_raw and nombre_empresa_raw:
+            nombre_a_id.setdefault(nombre_empresa_raw.strip().lower(), id_empresa_raw)
+
     proyectos = []
     empresas = {}  # id_excel -> nombre (primer nombre visto)
     for row in rows:
         id_excel = clean_text(row.get("id_proyecto"))
         if id_excel is None:
             continue
-        empresa_id_excel = clean_text(row.get("id_empresa")) or "SIN_EMPRESA"
-        empresa_nombre = clean_text(row.get("empresa")) or "Sin empresa asignada"
+        id_empresa_raw = clean_text(row.get("id_empresa"))
+        nombre_empresa_raw = clean_text(row.get("empresa"))
+        if id_empresa_raw:
+            empresa_id_excel = id_empresa_raw
+            empresa_nombre = nombre_empresa_raw or id_empresa_raw
+        elif nombre_empresa_raw:
+            # Sin id_empresa pero con nombre (39/326 proyectos en la planilla
+            # del 22-09): agrupar por nombre normalizado, no por el balde
+            # compartido "SIN_EMPRESA" — si no, todos estos proyectos (de
+            # empresas reales y distintas: CODELCO, Grenergy, Engie...)
+            # terminaban bajo una sola fila de empresa, con el nombre de
+            # cualquiera haya sido el primero que el script procesó y el
+            # resto perdido. Si el nombre matchea una empresa que en OTRA
+            # fila sí trae id_empresa, se usa ese id real; si no, la clave
+            # sintética "NOMBRE:..." agrupa por nombre nomás — nunca se
+            # guarda como id_excel (ver el insert más abajo).
+            clave_nombre = nombre_empresa_raw.strip().lower()
+            empresa_id_excel = nombre_a_id.get(clave_nombre, f"NOMBRE:{clave_nombre}")
+            empresa_nombre = nombre_empresa_raw
+        else:
+            empresa_id_excel = "SIN_EMPRESA"
+            empresa_nombre = "Sin empresa asignada"
         empresas.setdefault(empresa_id_excel, empresa_nombre)
 
         proyectos.append({
@@ -565,7 +597,10 @@ def main():
         # -- empresas --
         empresa_ids = {}
         for id_excel, nombre in empresas.items():
-            db_id_excel = None if id_excel == "SIN_EMPRESA" else id_excel
+            # Ni "SIN_EMPRESA" ni una clave "NOMBRE:..." son un id real de la
+            # planilla — las dos son sintéticas, agregadas acá para poder
+            # agrupar filas sin id_empresa (ver read_proyectos).
+            db_id_excel = None if id_excel == "SIN_EMPRESA" or id_excel.startswith("NOMBRE:") else id_excel
             cur.execute(
                 "INSERT INTO empresas (id_excel, nombre) VALUES (%s, %s) RETURNING id",
                 (db_id_excel, nombre),
