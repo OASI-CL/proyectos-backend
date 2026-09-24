@@ -110,18 +110,36 @@ async function usuarioDev(req: Request): Promise<UsuarioAutenticado> {
   }
 }
 
+/** What resolving a Cognito token against `usuarios` can come back with. */
+type ResolucionUsuario =
+  | { ok: true; user: UsuarioAutenticado }
+  | { ok: false; status: 401; body: { error: string; message: string } }
+  | {
+      ok: false
+      status: 403
+      body: { error: string; message: string }
+      /** What we know even though the role/scope isn't usable yet — enough for `/me` to show a name and a logout button. */
+      parcial: { sub: string; nombre: string; email: string; rol: RolUsuario | null }
+    }
+
 /**
- * Authentication middleware. Leaves the user on req.user or answers 401.
+ * Verifies the token and resolves the app user, without deciding whether
+ * that's enough to use the app — `requireAuth` below makes that call for
+ * every data route. Split out so `/me` can use the same verification but
+ * answer 200 with whatever it knows even when the role or scope is
+ * incomplete: otherwise a user stuck in that state never gets `req.user`
+ * on the frontend, `useAuth` never sees them as logged in, and the "Salir"
+ * button (which only renders once there's a `usuario`) never appears —
+ * there'd be no way out of the app short of clearing cookies by hand.
  */
-export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+async function resolverUsuario(req: Request): Promise<ResolucionUsuario> {
   if (AUTH_MODE === 'dev') {
-    req.user = await usuarioDev(req)
-    return next()
+    return { ok: true, user: await usuarioDev(req) }
   }
 
   const header = req.header('authorization')
   if (!header?.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'no_autenticado', message: 'Falta el token' })
+    return { ok: false, status: 401, body: { error: 'no_autenticado', message: 'Falta el token' } }
   }
 
   // Only a failure to verify the token is a 401. Everything after it (the
@@ -132,59 +150,111 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   try {
     payload = await getVerifier().verify(header.slice('Bearer '.length))
   } catch {
-    return res.status(401).json({ error: 'token_invalido', message: 'Token inválido o expirado' })
+    return { ok: false, status: 401, body: { error: 'token_invalido', message: 'Token inválido o expirado' } }
   }
 
-  try {
-    const grupos = (payload['cognito:groups'] as string[] | undefined) ?? []
-    const rolCognito = rolDesdeGrupos(grupos)
+  const grupos = (payload['cognito:groups'] as string[] | undefined) ?? []
+  const rolCognito = rolDesdeGrupos(grupos)
 
-    // The usuarios table complements the JWT with the scope (which company,
-    // agency or region the person belongs to). Read through v_usuarios so the
-    // region comes back both as its id (what the filters use) and as its name.
-    const { rows } = await pool.query(
-      `SELECT nombre, email, rol, empresa_id, organismo_id, region_id, region
-         FROM v_usuarios WHERE cognito_sub = $1`,
-      [payload.sub],
-    )
+  // The usuarios table complements the JWT with the scope (which company,
+  // agency or region the person belongs to). Read through v_usuarios so the
+  // region comes back both as its id (what the filters use) and as its name.
+  const { rows } = await pool.query(
+    `SELECT nombre, email, rol, empresa_id, organismo_id, region_id, region
+       FROM v_usuarios WHERE cognito_sub = $1`,
+    [payload.sub],
+  )
 
-    const fila = rows[0]
-    const rol = (fila?.rol as RolUsuario | undefined) ?? rolCognito
+  const fila = rows[0]
+  const rol = (fila?.rol as RolUsuario | undefined) ?? rolCognito
+  const nombre = fila?.nombre ?? String(payload.name ?? payload.email ?? payload.sub)
+  const email = fila?.email ?? String(payload.email ?? '')
 
-    if (!rol) {
-      return res.status(403).json({
+  if (!rol) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
         error: 'sin_rol',
         message: 'El usuario no tiene rol asignado. Pedile a un administrador que te dé de alta.',
-      })
+      },
+      parcial: { sub: String(payload.sub), nombre, email, rol: null },
     }
+  }
 
-    // A scoped role without its scope would otherwise fall through to "see
-    // everything" — refuse instead of leaking.
-    const scopeFaltante =
-      (rol === 'empresa' && fila?.empresa_id == null) ||
-      (rol === 'organismo' && fila?.organismo_id == null) ||
-      (rol === 'region' && fila?.region_id == null)
+  // A scoped role without its scope would otherwise fall through to "see
+  // everything" — refuse instead of leaking.
+  const scopeFaltante =
+    (rol === 'empresa' && fila?.empresa_id == null) ||
+    (rol === 'organismo' && fila?.organismo_id == null) ||
+    (rol === 'region' && fila?.region_id == null)
 
-    if (scopeFaltante) {
-      return res.status(403).json({
+  if (scopeFaltante) {
+    return {
+      ok: false,
+      status: 403,
+      body: {
         error: 'sin_alcance',
         message: `El rol ${rol} necesita tener asignado su alcance. Contactá a un administrador.`,
-      })
+      },
+      parcial: { sub: String(payload.sub), nombre, email, rol },
     }
+  }
 
-    req.user = {
+  return {
+    ok: true,
+    user: {
       sub: String(payload.sub),
-      nombre: fila?.nombre ?? String(payload.name ?? payload.email ?? payload.sub),
-      email: fila?.email ?? String(payload.email ?? ''),
+      nombre,
+      email,
       rol,
       empresaId: fila?.empresa_id ?? null,
       organismoId: fila?.organismo_id ?? null,
       regionId: fila?.region_id ?? null,
       region: fila?.region ?? null,
+    },
+  }
+}
+
+/**
+ * Authentication middleware. Leaves the user on req.user or answers
+ * 401/403. Every data route uses this — a role without its scope must never
+ * fall through to "see everything", so this is the strict form.
+ */
+export async function requireAuth(req: Request, res: Response, next: NextFunction) {
+  try {
+    const resolucion = await resolverUsuario(req)
+    if (!resolucion.ok) {
+      return res.status(resolucion.status).json(resolucion.body)
     }
+    req.user = resolucion.user
     return next()
   } catch (err) {
     // Not an auth problem: let the error handler report it as what it is.
+    return next(err)
+  }
+}
+
+/**
+ * Same verification as `requireAuth`, but never blocks on a missing
+ * role/scope — used only by `GET /me`, so the frontend can always find out
+ * who's signed in (and offer "Salir") even when that person isn't set up
+ * to use the app yet. Still answers 401 for a missing/invalid token: there's
+ * no "who" to report in that case.
+ */
+export async function identificar(req: Request, res: Response, next: NextFunction) {
+  try {
+    const resolucion = await resolverUsuario(req)
+    if (resolucion.ok) {
+      req.user = resolucion.user
+      return next()
+    }
+    if (resolucion.status === 401) {
+      return res.status(401).json(resolucion.body)
+    }
+    // 403 sin_rol / sin_alcance: still identify the person, just not as a usable `req.user`.
+    return res.status(200).json({ ...resolucion.parcial, alcanceIncompleto: resolucion.body.message })
+  } catch (err) {
     return next(err)
   }
 }

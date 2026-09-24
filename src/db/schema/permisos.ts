@@ -35,20 +35,36 @@ export const permisos = pgTable(
     organismo_id: bigint('organismo_id', { mode: 'number' })
       .notNull()
       .references(() => organismos.id),
+    /**
+     * Nombre del permiso para mostrar. Columna "nombre_permiso_titular" de la
+     * planilla (como lo llama el titular). Si viene vacía o es solo un número
+     * (hay filas con "138", un código), la carga usa la primera que tenga
+     * texto de: nombre_permiso_decreto, nombre_permiso_cpat, tipo_permiso.
+     */
     nombre: text('nombre').notNull(),
-    /** 'Nombre Permiso Estándar' del Excel. 35 permisos solo traen este. */
+    /** Nombre estándar según el catálogo CPAT: columna "nombre_permiso_cpat". */
     nombre_estandar: text('nombre_estandar'),
+    /** Código del permiso en el catálogo CPAT: columna "codigo_cpat". */
+    codigo_cpat: text('codigo_cpat'),
+    /** Nombre según el decreto que lo regula: columna "nombre_permiso_decreto". */
+    nombre_decreto: text('nombre_decreto'),
     /** Texto libre: muy heterogéneo en el Excel origen. */
     tipo_permiso: text('tipo_permiso'),
     n_expediente: text('n_expediente'),
     /**
-     * 'Es crítico (Si/No)' del Excel: viene vacío en TODAS las filas, así que
-     * se cargó en false. Hay que marcarlos a mano desde la app.
+     * NO SE USA. La planilla del 23-09-2026 ya ni trae la columna "es_critico"
+     * (antes venía 100% vacía). La marca que importa es
+     * `habilitante_construccion`. Queda la columna para no romper datos viejos.
      */
     critico: boolean('critico').notNull().default(false),
     /** Construcción / operación / acceso al terreno / otro. */
     que_habilita: text('que_habilita'),
-    /** Dato sucio en origen (Si/si/SI/2/textos largos); lo dudoso quedó false. */
+    /**
+     * "es_permiso_habilitante_construccion" de la planilla. Dato sucio:
+     * Sí/Si/SI/si -> true; No/no -> false; vacío, "2" y textos largos
+     * ("No, pero si para terminarlas") -> false. La carga lista cuántos
+     * cayeron en "dudoso" para que se corrijan en la planilla.
+     */
     habilitante_construccion: boolean('habilitante_construccion').notNull().default(false),
     /** 1 = Pendiente. El id es estable porque el catálogo va en una migración. */
     estado_id: bigint('estado_id', { mode: 'number' })

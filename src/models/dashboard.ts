@@ -166,6 +166,7 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
         p.fecha_resolucion           AS resolved_on,
         p.dias_tramitacion           AS days_in_process,
         p.critico                    AS is_critical,
+        p.habilitante_construccion,
         (${PERMIT_TRACKING_STATUS_SQL}) AS tracking_status,
         (${OVERDUE_DAYS_SQL})           AS overdue_days
       FROM v_permisos p
@@ -208,6 +209,7 @@ export interface DashboardData {
   projectsBySector: Record<string, unknown>[]
   rcaStatus: Record<string, unknown>[]
   timeline: Record<string, unknown>[]
+  mapProjects: Record<string, unknown>[]
   monitor: Record<string, unknown>[]
   permitsByAgency: Record<string, unknown>[]
   permitsByRegion: Record<string, unknown>[]
@@ -230,6 +232,7 @@ export async function fetchDashboard(
     projectsBySector,
     rcaStatus,
     timeline,
+    mapProjects,
     monitor,
     permitsByAgency,
     permitsByRegion,
@@ -297,13 +300,19 @@ export async function fetchDashboard(
       ORDER BY construction_start_on
     `),
 
+    // --- Map: one row per project. Only region is known (no coordinates);
+    // the frontend places each dot inside its region. ---
+    run(`
+      SELECT id, id_excel, name, company_name, sector, region, project_status, investment_mmusd
+      FROM projects
+      ORDER BY investment_mmusd DESC NULLS LAST
+    `),
+
     // --- 5. "Monitor projects" banner ---
     //
-    // Two independent lenses on projects that have not started construction
-    // yet, not a single mutually-exclusive split — a project can appear in
-    // both cards.
-    //   upcoming     — construction starts within the next 90 days
-    //   few_permits  — 1 or 2 pending permits left (close to fully cleared)
+    // Projects that have not started construction yet, with an estimated
+    // start within the next 6 months (used to be 3 — and used to also have
+    // a second "few permits left" card, dropped: OASI only wants this one).
     run(`
       SELECT
         'upcoming'                                 AS bucket,
@@ -324,29 +333,7 @@ export async function fetchDashboard(
       WHERE project_status_code = 'no_iniciado'
         AND construction_start_on IS NOT NULL
         AND construction_start_on >= CURRENT_DATE
-        AND construction_start_on < CURRENT_DATE + 90
-
-      UNION ALL
-
-      SELECT
-        'few_permits'                              AS bucket,
-        count(*)::int                             AS project_count,
-        COALESCE(sum(investment_mmusd), 0)::numeric AS investment_mmusd,
-        COALESCE(sum(construction_jobs), 0)::int  AS construction_jobs,
-        COALESCE(sum(operation_jobs), 0)::int     AS operation_jobs,
-        json_agg(
-          json_build_object(
-            'id', id, 'idExcel', id_excel, 'name', name,
-            'companyName', company_name, 'sector', sector, 'region', region,
-            'investmentMmusd', investment_mmusd,
-            'constructionStartOn', construction_start_on,
-            'pendingPermitCount', pending_permit_count
-          ) ORDER BY pending_permit_count, name
-        )                                         AS projects
-      FROM projects
-      WHERE project_status_code = 'no_iniciado'
-        AND pending_permit_count > 0
-        AND pending_permit_count < 3
+        AND construction_start_on < CURRENT_DATE + 180
     `),
 
     // --- 8. Permits by agency ---
@@ -384,17 +371,24 @@ export async function fetchDashboard(
       GROUP BY 1
     `),
 
-    // --- 11. Critical permits ---
+    // --- 11. Pending permits that enable construction ---
     //
-    // Criticality is not just "overdue": an overdue permit blocking a
-    // project whose construction starts soon matters more. Those come
-    // first, then the longest overdue.
+    // Restricted to habilitante_construccion (the only real "this one
+    // matters more" flag OASI has — `critico` is a separate column that
+    // comes 100% empty from the source spreadsheet, so it's never used to
+    // decide priority) AND still pending — a resolved one isn't waiting on
+    // anything, so it doesn't belong in a list meant to say "here's what
+    // needs attention". Both on-time and overdue pending permits show, not
+    // just the overdue ones. Ranked so what needs attention first surfaces
+    // first: blocking a project whose construction starts soon, then
+    // overdue, then the rest. No LIMIT: this is the complete list, not a
+    // sample.
     run(`
       SELECT
         pm.id, pm.id_excel, pm.name, pm.agency_name AS agency,
         pm.project_id, pm.project_name, pm.company_name,
         pm.tracking_status, pm.overdue_days, pm.days_in_process,
-        pm.expected_resolution_on, pm.investment_mmusd, pm.is_critical,
+        pm.expected_resolution_on, pm.investment_mmusd,
         pj.construction_start_on,
         CASE
           WHEN pj.construction_start_on IS NOT NULL
@@ -403,15 +397,20 @@ export async function fetchDashboard(
         END AS priority
       FROM permits pm
       JOIN projects pj ON pj.id = pm.project_id
-      WHERE pm.tracking_status = 'overdue'
+      WHERE pm.habilitante_construccion IS TRUE AND pm.tracking_status <> 'resolved'
       ORDER BY
         CASE
           WHEN pj.construction_start_on IS NOT NULL
            AND pj.construction_start_on <= CURRENT_DATE + 90 THEN 0
           ELSE 1
         END,
-        pm.overdue_days DESC NULLS LAST
-      LIMIT 25
+        CASE pm.tracking_status
+          WHEN 'overdue' THEN 0
+          WHEN 'pending' THEN 1
+          ELSE 2
+        END,
+        pm.overdue_days DESC NULLS LAST,
+        pm.submitted_on DESC NULLS LAST
     `),
   ])
 
@@ -421,6 +420,7 @@ export async function fetchDashboard(
     projectsBySector: projectsBySector.rows,
     rcaStatus: rcaStatus.rows,
     timeline: timeline.rows,
+    mapProjects: mapProjects.rows,
     monitor: monitor.rows,
     permitsByAgency: permitsByAgency.rows,
     permitsByRegion: permitsByRegion.rows,

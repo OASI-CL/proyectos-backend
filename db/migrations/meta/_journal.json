@@ -43,6 +43,13 @@
       "when": 1790094504058,
       "tag": "0005_columnas_excel_2026_09_22",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790275380373,
+      "tag": "0008_titulares_y_columnas_cpat",
+      "breakpoints": true
     }
   ]
 }

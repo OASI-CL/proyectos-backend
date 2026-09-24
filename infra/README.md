@@ -179,7 +179,9 @@ cd infra && npx cdk deploy Oasi-Network Oasi-Database Oasi-Auth-dev Oasi-Storage
 
 npm run db:bootstrap                  # crea bases, usuarios y permisos
 npm run db:migrate -- --env=dev       # crea las tablas
-scripts/load-data.sh dev              # carga los datos históricos (opcional, 1 vez)
+.venv/bin/python db/seed_catalogos.py --solo-sql data/cargas/catalogos.sql
+scripts/aplicar-sql.sh dev data/cargas/catalogos.sql      # catálogos
+scripts/aplicar-sql.sh dev data/cargas/<fecha>_carga.sql  # planilla (generada por db/cargar_excel.py)
 scripts/create-admin.sh dev tu@correo.cl "Tu Nombre"   # primer admin
 npm run db:status -- --env=dev        # revisar como quedo
 npm run db:check  -- --env=dev        # comprobar que no alcanza la base del otro ambiente
@@ -262,7 +264,8 @@ Dos pasos:
 CDK crea una instancia RDS nueva para dev (~US$14/mes más) y la Lambda de dev
 pasa a usarla. Después: `npm run db:bootstrap` y
 `npm run db:migrate -- --env=dev` para dejarla con el schema, y
-`scripts/load-data.sh dev` si querés datos.
+`scripts/aplicar-sql.sh dev ...` con los catálogos y la planilla si querés
+datos (ver "Cargar datos" en el README principal).
 
 El mismo cambio al revés vuelve a la compartida (ojo: el servidor dedicado
 queda creado, hay que borrarlo a mano desde la consola de RDS).

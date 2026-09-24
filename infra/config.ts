@@ -219,8 +219,8 @@ export const CONFIG: Record<EnvName, EnvConfig> = {
     cognito: {},
 
     frontendOrigins: [
-      // Acá va la URL de Amplify de prod cuando exista:
-      // 'https://main.dxxxxxxxxxxxx.amplifyapp.com',
+      // Rama main de la app de Amplify.
+      'https://main.dyfx5stqf038v.amplifyapp.com',
     ],
 
     alarmEmail: 'oasi-ti@economia.cl',

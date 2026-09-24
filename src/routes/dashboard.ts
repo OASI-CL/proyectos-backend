@@ -43,7 +43,7 @@ router.get('/', async (req, res, next) => {
     const filters = parseFilters(req)
     const data = await fetchDashboard(pool, req.user!, filters)
 
-    const bucket = (name: 'upcoming' | 'few_permits') => {
+    const bucket = (name: 'upcoming') => {
       const row = data.monitor.find((r) => r.bucket === name) as
         | { project_count: number; investment_mmusd: unknown; construction_jobs: number; operation_jobs: number; projects: unknown[] }
         | undefined
@@ -72,7 +72,8 @@ router.get('/', async (req, res, next) => {
       projectsBySector: camelizeRows(data.projectsBySector),
       rcaStatus: camelizeRows(data.rcaStatus),
       timeline: camelizeRows(data.timeline),
-      monitor: { upcoming: bucket('upcoming'), fewPermits: bucket('few_permits') },
+      mapProjects: camelizeRows(data.mapProjects),
+      monitor: { upcoming: bucket('upcoming') },
       permitsByAgency: camelizeRows(data.permitsByAgency),
       permitsByRegion: camelizeRows(data.permitsByRegion),
       permitStatus: camelizeRows(data.permitStatus),

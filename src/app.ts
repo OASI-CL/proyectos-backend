@@ -3,7 +3,7 @@ import type { Request, Response, NextFunction } from 'express'
 import cors from 'cors'
 
 import { pool } from './db/client'
-import { requireAuth } from './middleware/auth'
+import { requireAuth, identificar } from './middleware/auth'
 import dashboardRouter from './routes/dashboard'
 import proyectosRouter from './routes/proyectos'
 import permisosRouter from './routes/permisos'
@@ -61,7 +61,12 @@ app.get('/health/db', async (_req, res) => {
 })
 
 // Devuelve quién soy, según el token (o el usuario falso en modo dev).
-app.get('/me', requireAuth, (req, res) => {
+// Usa `identificar`, no `requireAuth`: si el token es válido pero a la
+// persona le falta rol o alcance, `identificar` ya responde 200 con lo que
+// se sabe (nombre, email, el mensaje de qué falta) sin llegar hasta acá —
+// así el frontend puede mostrar el botón "Salir" en vez de dejarla sin
+// ninguna salida. Acá solo se llega cuando el usuario quedó resuelto del todo.
+app.get('/me', identificar, (req, res) => {
   res.json(req.user)
 })
 
