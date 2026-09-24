@@ -395,16 +395,18 @@ export async function fetchDashboard(
       GROUP BY 1
     `),
 
-    // --- 11. All permits that enable construction ---
+    // --- 11. Pending permits that enable construction ---
     //
     // Restricted to habilitante_construccion (the only real "this one
     // matters more" flag OASI has — `critico` is a separate column that
     // comes 100% empty from the source spreadsheet, so it's never used to
-    // decide priority). Every habilitante permit shows, not just the
-    // overdue ones — but still ranked so the ones that need attention
-    // surface first: blocking a project whose construction starts soon,
-    // then overdue, then pending, then already resolved. No LIMIT: this is
-    // meant to be the complete list, not a sample.
+    // decide priority) AND still pending — a resolved one isn't waiting on
+    // anything, so it doesn't belong in a list meant to say "here's what
+    // needs attention". Both on-time and overdue pending permits show, not
+    // just the overdue ones. Ranked so what needs attention first surfaces
+    // first: blocking a project whose construction starts soon, then
+    // overdue, then the rest. No LIMIT: this is the complete list, not a
+    // sample.
     run(`
       SELECT
         pm.id, pm.id_excel, pm.name, pm.agency_name AS agency,
@@ -419,7 +421,7 @@ export async function fetchDashboard(
         END AS priority
       FROM permits pm
       JOIN projects pj ON pj.id = pm.project_id
-      WHERE pm.habilitante_construccion IS TRUE
+      WHERE pm.habilitante_construccion IS TRUE AND pm.tracking_status <> 'resolved'
       ORDER BY
         CASE
           WHEN pj.construction_start_on IS NOT NULL
