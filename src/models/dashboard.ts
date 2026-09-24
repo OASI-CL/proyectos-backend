@@ -310,11 +310,9 @@ export async function fetchDashboard(
 
     // --- 5. "Monitor projects" banner ---
     //
-    // Two independent lenses on projects that have not started construction
-    // yet, not a single mutually-exclusive split — a project can appear in
-    // both cards.
-    //   upcoming     — construction starts within the next 90 days
-    //   few_permits  — 1 or 2 pending permits left (close to fully cleared)
+    // Projects that have not started construction yet, with an estimated
+    // start within the next 6 months (used to be 3 — and used to also have
+    // a second "few permits left" card, dropped: OASI only wants this one).
     run(`
       SELECT
         'upcoming'                                 AS bucket,
@@ -335,29 +333,7 @@ export async function fetchDashboard(
       WHERE project_status_code = 'no_iniciado'
         AND construction_start_on IS NOT NULL
         AND construction_start_on >= CURRENT_DATE
-        AND construction_start_on < CURRENT_DATE + 90
-
-      UNION ALL
-
-      SELECT
-        'few_permits'                              AS bucket,
-        count(*)::int                             AS project_count,
-        COALESCE(sum(investment_mmusd), 0)::numeric AS investment_mmusd,
-        COALESCE(sum(construction_jobs), 0)::int  AS construction_jobs,
-        COALESCE(sum(operation_jobs), 0)::int     AS operation_jobs,
-        json_agg(
-          json_build_object(
-            'id', id, 'idExcel', id_excel, 'name', name,
-            'companyName', company_name, 'sector', sector, 'region', region,
-            'investmentMmusd', investment_mmusd,
-            'constructionStartOn', construction_start_on,
-            'pendingPermitCount', pending_permit_count
-          ) ORDER BY pending_permit_count, name
-        )                                         AS projects
-      FROM projects
-      WHERE project_status_code = 'no_iniciado'
-        AND pending_permit_count > 0
-        AND pending_permit_count < 3
+        AND construction_start_on < CURRENT_DATE + 180
     `),
 
     // --- 8. Permits by agency ---
