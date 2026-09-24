@@ -153,6 +153,8 @@ export interface Proyecto extends Auditoria {
   nombre: string
   titular: string | null
   empresa_id: number
+  /** Titular (razón social que tramita). `titular` es su nombre para mostrar. */
+  titular_id: number | null
   region_id: number | null
   sector_id: number | null
   /** Subclasificación dentro del sector (catálogo `tipologias`). Sin usar aún: 0/326 proyectos la traen. */
@@ -188,7 +190,10 @@ export interface Permiso extends Auditoria {
   proyecto_id: number
   organismo_id: number
   nombre: string
+  /** Nombre estándar según el catálogo CPAT. */
   nombre_estandar: string | null
+  codigo_cpat: string | null
+  nombre_decreto: string | null
   tipo_permiso: string | null
   n_expediente: string | null
   critico: boolean

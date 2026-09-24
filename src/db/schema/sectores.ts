@@ -3,10 +3,10 @@ import { bigserial, integer, pgTable, text } from 'drizzle-orm/pg-core'
 /**
  * Sectores productivos de los proyectos (Energía, Minería, ...).
  *
- * El catálogo sale de lo que efectivamente trae el Excel origen, ya limpiado:
- * dos variantes sucias se consolidan al cargar los datos (ver `db/seed.py`),
- * `Infraestructura` -> `Infraestructura / Obras públicas` y
- * `Energía / Infraestructura` -> `Energía`.
+ * Los datos están en `db/seed_catalogos.py` (SECTORES). Las variantes con
+ * que la planilla escribe algunos (`Infraestructura` -> `Infraestructura /
+ * Obras públicas`, `Otros` -> `Otro`, ...) están en SECTOR_ALIAS, en el mismo
+ * archivo.
  */
 export const sectores = pgTable('sectores', {
   id: bigserial('id', { mode: 'number' }).primaryKey(),

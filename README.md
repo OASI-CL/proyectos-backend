@@ -18,7 +18,7 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 - `src/db/schema/` — **el modelo de datos**: un archivo por tabla, con sus
   columnas, claves foráneas e índices. Las migraciones y los tipos de
   TypeScript se generan desde ahí
-- `db/seed.py` — carga el Excel origen a Postgres, probado con datos reales
+- `db/seed_catalogos.py` (catálogos fijos) y `db/cargar_excel.py` (carga incremental de cada planilla), probados con datos reales
   (317 proyectos, 1.552 permisos, 12 ministerios, 19 organismos)
 - Todas las rutas de la API (ver "Endpoints" abajo)
 - `src/models/` — todo el SQL de la app, separado de las rutas (ver
@@ -66,7 +66,7 @@ está en `claude_instructions.md`, en la raíz de `oasi/` (un nivel arriba de es
 | Cliente DB | `pg` (pool de conexiones). **No** se usa RDS Data API. |
 | Auth | AWS Cognito (JWT verificado con `aws-jwt-verify`) |
 | Adjuntos | S3 (`@aws-sdk/client-s3` + presigned URLs) |
-| Carga inicial de datos | Python 3 (`db/seed.py`), venv propio |
+| Carga de datos | Python 3 (`db/seed_catalogos.py`, `db/cargar_excel.py`), venv propio |
 
 ---
 
@@ -109,20 +109,22 @@ proyectos-backend/
     migrations/             generadas desde src/db/schema/, más las escritas a
                             mano para lo que un modelo no expresa (vistas,
                             triggers, datos de catálogos)
-    seed.py                  carga el Excel origen -> Postgres
+    seed_catalogos.py        CATÁLOGOS fijos (organismos, ministerios, regiones, ...). No lee el Excel
+    cargar_excel.py          carga INCREMENTAL de cada planilla nueva (empresas, titulares, proyectos, permisos)
+    comun_carga.py           utilidades de los dos anteriores (conexión, SQL, normalizar nombres)
   infra/                    infraestructura en CDK (ver infra/README.md)
     config.ts                 TODA la configuración de los ambientes, en un archivo
     bin/app.ts                qué stacks existen
     lib/                      network / database / auth / storage / api
   scripts/
     db.ts                     todos los comandos de base de datos (npm run db:*)
-    load-data.sh              carga inicial de datos históricos
+    aplicar-sql.sh            aplica en dev/prod el SQL que generan seed_catalogos.py / cargar_excel.py
     create-admin.sh           primer admin de un ambiente
     amplify-env.sh            apunta una rama de Amplify a su ambiente
     build-lambda.sh           arma dist-lambda/
     smoke-lambda.cjs          prueba dist-lambda/ antes de desplegarlo
-  data/                     (no versionado) acá va el Excel origen, ver abajo
-  .venv/                    (no versionado) entorno virtual Python para seed.py
+  data/                     (no versionado) acá van las planillas, y en data/cargas/ el SQL de cada carga
+  .venv/                    (no versionado) entorno virtual Python para los scripts de db/
 ```
 
 ### Dónde vive qué: `schema/` vs `models/`
@@ -238,30 +240,57 @@ después `npm run db:migrate -- --env=local`. Detalle en
 
 ### 6. Cargar los datos del Excel (opcional, para tener datos reales)
 
-El Excel origen **no está en el repo** (es información privada, está en
-`.gitignore`). Hay que dejarlo en `data/`:
-
-```
-proyectos-backend/data/20260904 Levantamiento de Permisos.xlsx
-```
-
 Crear el venv de Python (una sola vez):
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install pandas openpyxl psycopg2-binary
+.venv/bin/pip install openpyxl psycopg2-binary
 ```
 
-Correr el seed:
+Los datos se cargan en DOS partes, con dos scripts distintos:
+
+**a) Catálogos** — `db/seed_catalogos.py`. Ministerios, organismos, regiones,
+sectores, tipologías, etapas y estados. Los datos están escritos en el propio
+archivo (NO se leen del Excel). Se corre al armar una base y cuando cambia
+algún catálogo (se edita la lista del archivo y se corre de nuevo). Es
+idempotente.
 
 ```bash
-.venv/bin/python db/seed.py --dry-run   # valida el parseo sin escribir nada
-.venv/bin/python db/seed.py             # carga de verdad
+.venv/bin/python db/seed_catalogos.py
 ```
 
-Con el Excel del 2026-09-04 esto carga 317 proyectos, 1.552 permisos, 12
-ministerios, 19 organismos y ~854 vínculos permiso↔comité. El script imprime
-advertencias si encuentra filas con datos faltantes.
+**b) La planilla** — `db/cargar_excel.py`. Empresas, titulares, proyectos,
+permisos, comités y sus vínculos. Se corre **cada vez que llega una planilla
+nueva**. Es incremental: actualiza lo que ya existe (proyecto por su "P123",
+permiso por su "PM1377", empresa y titular por su nombre, comité por su
+número), agrega lo nuevo y **no borra nada**. Lo que estaba en la base y ya
+no viene en la planilla se lista en el reporte.
+
+```bash
+# 1. dejar la planilla en data/ (no está en git: es información privada)
+# 2. revisar sin escribir nada (valida contra los catálogos y lista lo raro):
+.venv/bin/python db/cargar_excel.py --file "data/20260923 Levantamiento de Permisos C.M.E.xlsx" --revisar
+# 3. cargar en la base local (genera data/cargas/<fecha>_carga.sql y lo aplica):
+.venv/bin/python db/cargar_excel.py --file "data/20260923 Levantamiento de Permisos C.M.E.xlsx"
+# 4. aplicar ESE MISMO archivo en dev y en prod:
+scripts/aplicar-sql.sh dev  data/cargas/<fecha>_carga.sql
+scripts/aplicar-sql.sh prod data/cargas/<fecha>_carga.sql
+```
+
+Si la planilla trae una región, sector, etapa u organismo que no está en el
+catálogo, el script **no carga nada** y dice cuál es: hay que agregarlo a
+`db/seed_catalogos.py` primero.
+
+**Empresa vs. titular** (no confundir): la EMPRESA es el grupo que quiere
+sacar el proyecto (AMSA, CODELCO); el TITULAR es la razón social que tramita
+los permisos (Minera Centinela, Codelco Chile División Salvador). Una empresa
+tiene muchos titulares. La empresa de cada proyecto sale de la columna
+"empresa" de la hoja "Proyectos", **por nombre**: el código "E###" de la
+planilla no sirve para identificarla (la misma empresa tiene varios códigos
+y un mismo código aparece en empresas distintas).
+
+Con la planilla del 23-09-2026: 121 empresas, 218 titulares, 325 proyectos,
+1.563 permisos, 10 comités y 1.002 vínculos permiso↔comité.
 
 ### 7. Levantar el server
 
@@ -290,7 +319,7 @@ curl http://localhost:3001/health
 | `npm run db:generate` | **Después de editar un modelo:** escribe sola la migración con el cambio |
 | `npm run db:generate:custom` | Crea una migración vacía para SQL a mano (vistas, triggers, catálogos) |
 | `npm run db:baseline -- --env=... --hasta=...` | Declara que una base ya está al día hasta cierta migración (sin ejecutarla) |
-| `npm run db:wipe -- --env=... --confirm` | **Destructivo.** Vacía proyectos/permisos/empresas/comités de ese ambiente (no toca `usuarios`) para poder cargar datos nuevos desde cero |
+| `npm run db:wipe -- --env=... --confirm` | **Destructivo.** Vacía todo menos catálogos y `usuarios` (empresas, titulares, proyectos, permisos, comités, historial, solicitudes, adjuntos). Solo para empezar de cero; la carga normal NO lo necesita |
 | `npm run build` | Revisa los tipos, sin generar archivos (`tsc --noEmit`) |
 | `npm start` | Corre el build compilado localmente (`dist-lambda/src/app.local.js`) |
 | `npm run build:lambda` | Compila + empaqueta `dist-lambda/` con `node_modules` de producción |
@@ -303,7 +332,7 @@ Scripts para operar un ambiente desplegado (usan tu `AWS_PROFILE`):
 |---|---|
 | `npm run db:status -- --env=dev` | Migraciones aplicadas y cantidad de filas |
 | `npm run db:check -- --env=dev` | Comprueba que las credenciales de un ambiente no abran la base del otro |
-| `scripts/load-data.sh dev` | Carga única de los datos desde tu base local; se niega si ya hay proyectos |
+| `scripts/aplicar-sql.sh dev <archivo.sql>` | Aplica en ese ambiente el SQL de `db/seed_catalogos.py --solo-sql` o de `db/cargar_excel.py` (una transacción) |
 | `scripts/create-admin.sh dev <email> "<nombre>"` | Primer admin de un ambiente (cuenta en Cognito + fila en `usuarios`) |
 | `scripts/amplify-env.sh <app-id> develop dev` | Apunta una rama de Amplify a su ambiente |
 
@@ -379,12 +408,12 @@ una columna aparte, `id_excel` (ej. `'P183'`, `'PM1377'`), que es solo
 informativo — nunca se usa como foreign key. Los proyectos/permisos creados
 desde la app tienen `id_excel = NULL`.
 
-### Catálogos (vocabulario controlado, cargados por las migraciones)
+### Catálogos (vocabulario controlado, `db/seed_catalogos.py`)
 
 Todo lo que es una lista cerrada es una tabla con id, no texto libre. Sus
-datos van en una migración, con **id explícito y estable**, así `region_id = 3`
-significa lo mismo en tu base local, en dev y en producción. No dependen del
-Excel: se cargan al crear la base.
+datos están escritos en `db/seed_catalogos.py`, con **id explícito y estable**,
+así `region_id = 3` significa lo mismo en tu base local, en dev y en
+producción. No dependen del Excel.
 
 | Tabla | Contenido |
 |---|---|
@@ -398,9 +427,11 @@ Excel: se cargan al crear la base.
 
 ### Tablas de datos
 
-`empresas`, `proyectos`, `permisos`, `comites`, `permisos_comite` (relación
-N:N — un permiso se revisa en varias sesiones de comité), `usuarios`,
-`solicitudes_cambio`, `historial`, `adjuntos`.
+- Vienen de la planilla (`db/cargar_excel.py`): `empresas`, `titulares`,
+  `proyectos`, `permisos`, `comites`, `permisos_comite` (relación N:N — un
+  permiso se revisa en varias sesiones de comité).
+- Propias de la app (nunca las toca una carga): `usuarios`,
+  `solicitudes_cambio`, `historial`, `adjuntos`.
 
 ### Vistas (todo valor calculado vive acá, nunca en una columna)
 
@@ -439,32 +470,31 @@ Es el lugar para mirar antes de agregar un endpoint.
 `created_by`, `updated_by`, `created_at`, `updated_at`. `updated_at` lo
 actualiza solo el trigger `set_updated_at()` — nunca se setea a mano.
 
-### Decisiones de limpieza de datos tomadas en `seed.py`
+### Decisiones de limpieza de datos (`db/cargar_excel.py`)
 
-El Excel origen tiene bastante suciedad. Documentado en el propio script,
+La planilla se llena a mano y viene sucia. Todo está comentado en el script;
 resumen:
 
-- **`critico`**: la columna "Es crítico (Si/No)" viene **100% vacía** en el
-  Excel — se cargó todo como `false`. Hay que marcarlos a mano en la app.
-- **`habilitante_construccion`**: respuestas muy inconsistentes (`Sí/Si/SI/si`,
-  números, textos largos). Todo lo que no es un sí/no claro quedó en `false`.
-- **Fechas basura** (`1900-03-29`, `S/I`, vacías) → `NULL`.
-- **Sectores duplicados** (`Inmobiliarios`/`Inmobiliario`, `Otros`/`Otro`) se
-  unificaron; el resto se dejó tal cual viene del Excel.
-- 35 permisos no traían "Nombre Permiso" pero sí "Nombre Permiso Estándar" —
-  se usó ese como respaldo en vez de perderlos.
-- `permisos_comite` solo trae el comité **actual** por permiso (el Excel no
-  guarda el historial completo de en qué sesiones estuvo cada permiso) — eso
-  se va a ir completando con el uso real de la app.
-- La planilla del 22-09-2026 trajo columnas que mezclan `1`/`0` numérico con
-  texto "Sí"/"No" para un mismo tipo de dato según la columna — `clean_bool`
-  reconoce los dos formatos.
-- `comite_registro` viene como texto ("Comité 10", "Por definir"): se extrae
-  el número con una expresión regular; lo que no matchea no vincula el
-  permiso a ningún comité.
-- `fecha_registro_catastro` mezcla fechas reales, números de serie de Excel
-  guardados como texto y fechas en formato `DD-MM-YYYY` como texto. `clean_date`
-  reconoce las tres formas; el resto (~30%) queda en `NULL`, no se adivina.
+- **Empresa por nombre, no por código "E###"**: el código no identifica a la
+  empresa (Grenergy tiene E058, E059, E060, E061 y E098; E060 es también Akuo
+  Energy). El nombre se normaliza (minúsculas, sin tildes, sin "S.A."/"SpA"
+  al final) para que "Colbún" y "Colbun S.A." sean la misma.
+- **La hoja "Proyectos" manda sobre "Titular-Empresa"**: si dicen empresas
+  distintas para un proyecto, gana la del proyecto (y se reporta).
+- **`habilitante_construccion`**: `Sí/Si/SI/si` → sí; `No/no` → no; vacío, `2`
+  y textos largos → no, y se cuentan en el reporte para corregirlos.
+- **Nombre del permiso**: "nombre_permiso_titular"; si viene vacío o es solo
+  un número (hay "138", un código), se usa decreto / CPAT / tipo de permiso.
+- **Fechas basura** (`1900-03-29`, `S/I`, `Por definir`) → `NULL`. Se reconocen
+  fechas reales, números de serie de Excel como texto y `DD-MM-YYYY` como texto.
+- **Sectores**: `Infraestructura` → `Infraestructura / Obras públicas`, y los
+  alias de `SECTOR_ALIAS` en `db/seed_catalogos.py`.
+- `comite_registro` ("Comité 10", "Por definir"): se extrae el número; lo que no
+  matchea no vincula el permiso a ningún comité.
+- Permisos cuyo proyecto no está en la hoja "Proyectos" no se cargan (se
+  reportan).
+- **`critico`** ya no viene en la planilla: la columna queda en `false`. La
+  marca que se usa es `habilitante_construccion`.
 - `n_catastro` en `proyectos` solo trae `1` o `2`. Se guarda tal cual — el
   significado exacto no está confirmado con OASI.
 

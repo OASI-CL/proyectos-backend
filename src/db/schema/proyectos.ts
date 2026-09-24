@@ -18,6 +18,7 @@ import { etapasProyecto } from './etapasProyecto'
 import { regiones } from './regiones'
 import { sectores } from './sectores'
 import { tipologias } from './tipologias'
+import { titulares } from './titulares'
 
 /**
  * Los proyectos de inversión que se siguen. Cada uno tiene N permisos.
@@ -32,8 +33,20 @@ export const proyectos = pgTable(
     /** 'P183', etc. NULL si lo creó la app. Solo para mostrar. */
     id_excel: text('id_excel'),
     nombre: text('nombre').notNull(),
-    /** Razón social del titular; puede diferir del nombre de la empresa. */
+    /**
+     * TITULAR = la razón social que tramita los permisos (ej. "Minera
+     * Centinela"). La fuente es `titular_id` (tabla `titulares`); esta
+     * columna de texto es una copia del nombre para mostrar, y el único dato
+     * en proyectos creados a mano desde la app (que no eligen de la tabla).
+     * La carga desde el Excel llena las dos.
+     */
     titular: text('titular'),
+    titular_id: bigint('titular_id', { mode: 'number' }).references(() => titulares.id),
+    /**
+     * EMPRESA = el grupo que quiere sacar el proyecto (ej. AMSA). Sale de la
+     * columna "empresa" de la hoja "Proyectos", por NOMBRE. Obligatoria: si
+     * la planilla no la trae, la carga usa la empresa "Sin empresa asignada".
+     */
     empresa_id: bigint('empresa_id', { mode: 'number' })
       .notNull()
       .references(() => empresas.id),
@@ -91,6 +104,7 @@ export const proyectos = pgTable(
     ),
     uniqueIndex('idx_proyectos_id_excel').on(tabla.id_excel).where(sql`id_excel IS NOT NULL`),
     index('idx_proyectos_empresa').on(tabla.empresa_id),
+    index('idx_proyectos_titular').on(tabla.titular_id),
     index('idx_proyectos_region').on(tabla.region_id),
     index('idx_proyectos_sector').on(tabla.sector_id),
     index('idx_proyectos_etapa').on(tabla.etapa_id),

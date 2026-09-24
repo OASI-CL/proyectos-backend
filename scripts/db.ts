@@ -35,8 +35,9 @@ const USO = `Uso:
       (solo para una base que ya tiene ese estado y no tiene historial:
        marca como aplicadas las migraciones hasta ese archivo, sin correrlas)
   npm run db:wipe -- --env=dev|prod --confirm
-      (DESTRUCTIVO: vacía proyectos/permisos/empresas/comités de ese ambiente,
-       para poder cargar datos nuevos desde cero con scripts/load-data.sh)`
+      (DESTRUCTIVO: vacía todo menos catálogos y usuarios, para empezar de
+       cero. La carga normal de cada planilla NO lo necesita: es incremental.
+       Después: scripts/aplicar-sql.sh con catálogos y planilla)`
 
 const comando = process.argv[2] as Comando | undefined
 const ambiente = process.argv.slice(3).find((a) => a.startsWith('--env='))?.split('=')[1] as
