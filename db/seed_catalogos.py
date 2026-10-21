@@ -58,6 +58,8 @@ MINISTERIOS = [
     # que "Municipalidades" arriba: un balde para organismos que no encajan
     # en la estructura ministerial sectorial.
     (13, "Gobiernos Regionales", None),
+    (14, "Ministerio de Desarrollo Social y Familia", "MDS"),
+    (15, "Ministerio de Hacienda", "HACIENDA"),
 ]
 
 # --- ORGANISMOS: (id, sigla, nombre largo, ministerio) ---------------------
@@ -85,6 +87,14 @@ ORGANISMOS = [
     (19, "VIALIDAD", "Dirección de Vialidad", "Ministerio de Obras Públicas"),
     (20, "EFE", "Empresa de los Ferrocarriles del Estado", "Ministerio de Transportes y Telecomunicaciones"),
     (21, "GORE BIOBÍO", "Gobierno Regional del Biobío", "Gobiernos Regionales"),
+    # Agregados con la planilla del 08-10-2026. El ministerio de cada uno sale
+    # de la propia columna "ministerio" de la hoja Permisos, no es una
+    # decisión a mano: la planilla ya los trae resueltos.
+    (22, "SERVIU", "Servicio de Vivienda y Urbanización", "Ministerio de Vivienda y Urbanismo"),
+    (23, "MDS", "Ministerio de Desarrollo Social y Familia", "Ministerio de Desarrollo Social y Familia"),
+    (24, "TGR", "Tesorería General de la República", "Ministerio de Hacienda"),
+    (25, "SMA", "Superintendencia del Medio Ambiente", "Ministerio de Medio Ambiente"),
+    (26, "DIRECCIÓN DE TRANSITO", "Dirección de Tránsito", "Ministerio de Transportes y Telecomunicaciones"),
 ]
 
 # Cómo escribe la planilla algunos organismos -> sigla en el catálogo.
@@ -96,6 +106,10 @@ ORGANISMO_ALIAS = {
     # de pago que depende del GORE, gatillada por una resolución del SSBB).
     # Se decidió (24-09-2026) que el organismo tramitador real es el GORE.
     "Gobierno Regional del Biobío (GORE) / Servicio de Salud Biobío (SSBB)": "GORE BIOBÍO",
+    # La planilla del 08-10-2026 trae "GORE" a secas (sin combinar con otro
+    # organismo) para proyectos de la región de Biobío: es el mismo GORE de
+    # arriba, no uno nuevo.
+    "GORE": "GORE BIOBÍO",
 }
 
 # --- REGIONES: (id, numero oficial, numeral, nombre, nombre oficial) -------
