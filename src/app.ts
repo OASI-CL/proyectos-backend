@@ -14,6 +14,7 @@ import catalogRouter from './routes/catalog'
 import adjuntosRouter from './routes/adjuntos'
 import approvalsRouter from './routes/approvals'
 import usuariosRouter from './routes/usuarios'
+import committeeTablesRouter from './routes/committeeTables'
 
 const app = express()
 
@@ -84,6 +85,7 @@ app.use('/catalog', requireAuth, catalogRouter)
 app.use('/adjuntos', requireAuth, adjuntosRouter)
 app.use('/approvals', requireAuth, approvalsRouter)
 app.use('/usuarios', requireAuth, usuariosRouter)
+app.use('/committee-tables', requireAuth, committeeTablesRouter)
 
 // 404 para rutas no conocidas
 app.use((_req, res) => {
