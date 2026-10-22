@@ -1,15 +1,15 @@
 import type { Pool } from 'pg'
 
 // ----------------------------------------------------------------------------
-// Committee tables — a replica of the "Tablas PPT" sheet of the Excel
-// "Levantamiento de Permisos C.M.E" (08-10-2026 version).
+// Committee tables — a replica of the "Tablas PPT Actualizada" sheet of the
+// Excel "Levantamiento de Permisos C.M.E" (08-10-2026 version).
 //
 // These are the tables the team pastes into each committee presentation:
 //   Table 1    projects and permits per session (baseline + every session)
 //   Table 1.1  projects whose permits in progress are ALL older than 6 months
 //   Table 2.1  all projects by stage
 //   Table 2.2  released projects by stage
-//   Table 3    permit progress and delay by ministry
+//   Table 3    permit progress by ministry (previous vs current session)
 //   Table 4    cumulative % progress by ministry, session by session
 //
 // Every calculation cites the Excel cell/formula it replicates. Everything
@@ -22,46 +22,49 @@ import type { Pool } from 'pg'
 //   - Permits registered IN the current committee are left out of Tables 3
 //     and 4 (filter `comite_registro <> "Comité N"`); they show up separately
 //     as "Se añaden" (newly added).
+//   - Universe ("en_universo_2"): every project of the 1st catastro batch,
+//     plus the 2nd-batch projects that are still active (see the query).
 // ----------------------------------------------------------------------------
 
 /**
  * Baseline date (column C of Table 1, "8 de mayo"). In the Excel it is a
  * fixed value, not a committee session, so it does not live in `comites`.
- * It also defines the universe: a permit resolved BEFORE this date is out
- * (see `in_universe` below).
+ * It also defines the universe: a permit resolved BEFORE this date is out.
  */
 export const BASELINE_DATE = '2026-05-08'
 
 /**
+ * Date the 2nd catastro batch joins the follow-up (Parámetros!C19,
+ * "FechaIngresoCat2"). Before it, Table 1 only counts 1st-batch projects.
+ */
+export const SECOND_BATCH_DATE = '2026-10-15'
+
+/**
  * Rows of Tables 3 and 4, in the sheet's order. The Excel matches by the
- * ministry name PREFIX (`TRIM($B51)&"*"`), which is why
+ * ministry name PREFIX (`TRIM($B52)&"*"`), which is why
  * "Ministerio de las Culturas" is enough for the long name.
  *
  * - `statutoryDays`: "Plazo normativo (días promedio ponderado)". In the
- *   sheet it is a hand-typed number (not a formula), so it is copied as is.
- * - `noData`: the sheet writes "Sin información" instead of the resolved
- *   count for these two (no reliable resolution dates).
- *
- * NOTE: the sheet leaves OUT the ministries that are not in this list
- * (Medio Ambiente, Transportes, GORE, ...); Table 3's total is the sum of
- * these 10 rows. Replicated as is, and the number of permits left out is
- * reported separately so it does not go unnoticed.
+ *   sheet it is a hand-typed number (not a formula), so it is copied as is;
+ *   the last three ministries have none.
+ * - `noData`: the sheet leaves the resolved figures of these two empty
+ *   ("Sin información": no reliable resolution dates).
  */
-export const TABLE_MINISTRIES = [
+export const TABLE_MINISTRIES: readonly { label: string; statutoryDays: number | null; noData?: boolean }[] = [
   { label: 'Ministerio de Bienes Nacionales', statutoryDays: 128 },
   { label: 'Ministerio de Obras Públicas', statutoryDays: 177 },
-  { label: 'Ministerio de Minería', statutoryDays: 50 },
   { label: 'Ministerio de Salud', statutoryDays: 30 },
+  { label: 'Ministerio de Minería', statutoryDays: 50 },
   { label: 'Ministerio de Energía', statutoryDays: 170 },
   { label: 'Ministerio de Agricultura', statutoryDays: 53 },
   { label: 'Ministerio de las Culturas', statutoryDays: 68 },
   { label: 'Ministerio de Vivienda y Urbanismo', statutoryDays: 45 },
   { label: 'Ministerio de Defensa Nacional', statutoryDays: 180, noData: true },
   { label: 'Municipalidades', statutoryDays: 30, noData: true },
-] as const
-
-/** Statutory days of the Total row (J61), also hand-typed in the sheet. */
-export const TOTAL_STATUTORY_DAYS = 74
+  { label: 'Ministerio de Medio Ambiente', statutoryDays: null },
+  { label: 'Ministerio de Transportes y Telecomunicaciones', statutoryDays: null },
+  { label: 'Ministerio de Desarrollo Social y Familia', statutoryDays: null },
+]
 
 /** Table 2 stages, in the sheet's order (they match `etapas_proyecto`). */
 const STAGES = ['No se ha iniciado', 'En fase de construcción', 'En operación'] as const
@@ -81,7 +84,7 @@ interface PermitRow {
   status: string | null
   filed_date: string | null
   resolution_date: string | null
-  /** Excel column Permisos[en_universo], recomputed (see the query). */
+  /** Excel column Permisos[en_universo_2], recomputed (see the query). */
   in_universe: boolean
   /** Excel column Permisos[supera_6_meses], recomputed as of today (see the query). */
   over_6_months: boolean
@@ -91,6 +94,7 @@ interface PermitRow {
 
 interface ProjectRow {
   id: number
+  batch: number // n_catastro: 1 or 2
   stage: string | null
   investment_mmusd: number
   construction_jobs: number
@@ -124,15 +128,18 @@ export interface StageRow {
 
 export interface Table3Row {
   ministry: string
-  total: number
-  inProgress: number
-  /** null = "Sin información". */
-  resolved: number | null
+  /** "Totales al Comité N-1". */
+  totalAtPrevious: number
+  /** "Pendientes al Comité N-1"; null = "Sin información". */
+  pendingAtPrevious: number | null
+  /** "Resueltos entre Comité N-1 y N"; null = empty in the sheet. */
+  resolvedBetween: number | null
+  /** "Resueltos totales" up to the current session; null = empty. */
+  resolvedTotal: number | null
   progress: number | null
-  resolvedSincePreviousSession: number | null
-  over6Months: number
-  over6MonthsShare: number
-  statutoryDays: number
+  /** "Se añaden (Comité N)". */
+  added: number
+  statutoryDays: number | null
 }
 
 export interface Table4Row {
@@ -147,6 +154,7 @@ export interface CommitteeTables {
   /** Today's date, used for the "+6 months" figures (the sheet uses TODAY()). */
   computedOn: string
   baselineDate: string
+  secondBatchDate: string
   currentSession: Session
   previousSession: Session | null
   sessions: Session[]
@@ -155,8 +163,13 @@ export interface CommitteeTables {
   table21: { rows: StageRow[]; total: StageRow }
   table22: { rows: StageRow[]; total: StageRow }
   table3: { rows: Table3Row[]; total: Table3Row }
-  table4: { rows: Table4Row[]; total: Table4Row }
-  /** Permits from ministries the sheet does not list (left out of Tables 3 and 4). */
+  table4: {
+    rows: Table4Row[]
+    total: Table4Row
+    /** "Avance en puntos porcentuales": total % minus the previous session's; null for the first. */
+    pointsGained: (number | null)[]
+  }
+  /** Universe permits from ministries the sheet does not list (left out of Tables 3 and 4). */
   permitsOutsideListedMinistries: number
 }
 
@@ -176,13 +189,20 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
   const current = sessions[sessions.length - 1]
   const previous = sessions.length > 1 ? sessions[sessions.length - 2] : null
 
-  const { rows: [dates] } = await pool.query<{ today: string; current_minus_6m: string }>(
-    // Excel's EDATE(date, -6) = subtract 6 months clamping to month end,
-    // which is exactly what `interval '6 months'` does in Postgres.
-    `SELECT current_date::text AS today,
-            ($1::date - interval '6 months')::date::text AS current_minus_6m`,
-    [current.date],
-  )
+  const { rows: [dates] } = await pool.query<{ today: string }>(`SELECT current_date::text AS today`)
+
+  // Excel Proyectos[en_universo_2]: every 1st-batch project, plus the
+  // 2nd-batch ones that still have a pending permit or had one resolved
+  // since the 2nd batch joined. Shared by both queries below.
+  const projectUniverseSql = `
+    pr.n_catastro = 1
+    OR (pr.n_catastro = 2 AND EXISTS (
+      SELECT 1 FROM permisos p2
+        JOIN estados_permiso e2 ON e2.id = p2.estado_id
+       WHERE p2.proyecto_id = pr.id
+         AND (e2.nombre = 'Pendiente'
+              OR (e2.nombre = 'Resuelto' AND p2.fecha_resolucion >= $1::date))
+    ))`
 
   const { rows: permits } = await pool.query<PermitRow>(
     `SELECT p.proyecto_id::int AS project_id,
@@ -190,11 +210,11 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
             e.nombre AS status,
             p.fecha_ingreso::text AS filed_date,
             p.fecha_resolucion::text AS resolution_date,
-            -- Excel Permisos[en_universo]: project from the 1st catastro
-            -- batch, not discarded and not resolved before the baseline.
-            (pr.n_catastro = 1
+            -- Excel Permisos[en_universo_2]: project in the universe, not
+            -- discarded and not resolved before the baseline.
+            ((${projectUniverseSql})
               AND e.nombre IS DISTINCT FROM 'Descartado'
-              AND NOT COALESCE(p.fecha_resolucion < $1::date, false)) AS in_universe,
+              AND NOT COALESCE(p.fecha_resolucion < $2::date, false)) AS in_universe,
             -- Excel Permisos[supera_6_meses]: resolved -> took more than 6
             -- months; resolved/discarded without a date -> unknown (false);
             -- pending -> has been open for more than 6 months as of today.
@@ -207,27 +227,28 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
             END AS over_6_months,
             EXISTS (
               SELECT 1 FROM permisos_comite pc
-               WHERE pc.permiso_id = p.id AND pc.comite_id = $2
+               WHERE pc.permiso_id = p.id AND pc.comite_id = $3
             ) AS in_current_committee
        FROM permisos p
        JOIN proyectos pr ON pr.id = p.proyecto_id
        LEFT JOIN estados_permiso e ON e.id = p.estado_id
        LEFT JOIN organismos o ON o.id = p.organismo_id
        LEFT JOIN ministerios m ON m.id = o.ministerio_id`,
-    [BASELINE_DATE, current.id],
+    [SECOND_BATCH_DATE, BASELINE_DATE, current.id],
   )
 
-  // Only projects from the 1st catastro batch: EVERY project table in the
-  // sheet filters on `n_catastro = 1`.
+  // Only projects in the universe: EVERY project table in the sheet filters on it.
   const { rows: projects } = await pool.query<ProjectRow>(
     `SELECT pr.id::int AS id,
+            pr.n_catastro AS batch,
             et.nombre AS stage,
             COALESCE(pr.inversion_mmusd, 0)::float8 AS investment_mmusd,
             COALESCE(pr.empleo_construccion, 0)::int AS construction_jobs,
             pr.sigue_liberado_al_contactar AS still_released_on_contact
        FROM proyectos pr
        LEFT JOIN etapas_proyecto et ON et.id = pr.etapa_id
-      WHERE pr.n_catastro = 1`,
+      WHERE ${projectUniverseSql}`,
+    [SECOND_BATCH_DATE],
   )
 
   const permitsByProject = new Map<number, PermitRow[]>()
@@ -289,12 +310,17 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
 
   // --- Table 1 -------------------------------------------------------------
 
+  /** C10: 1st-batch projects, plus the 2nd batch from the date it joined. */
+  const projectsAsOf = (date: string) =>
+    projects.filter((pr) => pr.batch === 1 || date >= SECOND_BATCH_DATE)
+
   const columns = [
     { label: 'Línea Base', date: BASELINE_DATE },
     ...sessions.map((s) => ({ label: `Sesión ${s.number}`, date: s.date })),
   ]
   const table1: Table1Column[] = columns.map((col, i) => {
-    const released = projects.filter((pr) => releasedAsOf(pr, col.date)).length // C12
+    const inScope = projectsAsOf(col.date)
+    const released = inScope.filter((pr) => releasedAsOf(pr, col.date)).length // C12
     // C13: universe permits filed by that date.
     const filed = universe.filter((p) => p.filed_date && p.filed_date <= col.date)
     // C15: of those, resolved by that date.
@@ -308,8 +334,8 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
     return {
       label: col.label,
       date: col.date,
-      totalProjects: projects.length, // C10
-      projectsInProgress: projects.length - released, // C11
+      totalProjects: inScope.length,
+      projectsInProgress: inScope.length - released, // C11
       releasedProjects: released,
       totalPermits: filed.length,
       permitsInProgress: filed.length - resolved, // C14
@@ -344,11 +370,10 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
   const table21 = byStage(projects)
   const table22 = byStage(projects.filter(isReleased))
 
-  // --- Table 3 (C51:J61) ---------------------------------------------------
+  // --- Table 3 (C52:I65) ---------------------------------------------------
   //
-  // Table universe: universe permits filed up to the PREVIOUS session that
-  // were not registered in the current committee. Resolutions, on the other
-  // hand, are counted up to the CURRENT session.
+  // Table base: universe permits filed up to the PREVIOUS session that were
+  // not registered in the current committee.
 
   const dateN = previous?.date ?? current.date // $N$7
   const dateO = current.date // $O$7
@@ -357,86 +382,79 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
   )
   const ofMinistry = (list: PermitRow[], label: string) =>
     list.filter((p) => p.ministry?.startsWith(label))
-
-  const rows3: Table3Row[] = TABLE_MINISTRIES.map((m) => {
-    const ps = ofMinistry(tableBase, m.label)
-    const total = ps.length // C51
-    const noData = 'noData' in m && m.noData
-    // E51: resolved (with a date) up to the current session.
-    const resolved = noData ? null : ps.filter((p) => p.resolution_date && p.resolution_date <= dateO).length
-    // G51: status Resuelto, resolved between the previous and current session.
-    const sincePrevious = noData
-      ? null
-      : ps.filter((p) => p.status === 'Resuelto' && p.resolution_date && p.resolution_date > dateN && p.resolution_date <= dateO).length
-    // H51: filed more than 6 months before the current session and not yet
-    // resolved by it. Note this one filters filing by EDATE(O,-6), not by the
-    // previous session, so it starts from the full universe of the ministry.
-    const over6 = ofMinistry(universe, m.label).filter(
-      (p) =>
-        !p.in_current_committee &&
-        p.filed_date && p.filed_date <= dates.current_minus_6m &&
-        !(p.resolution_date && p.resolution_date <= dateO),
-    ).length
-    return {
-      ministry: m.label,
-      total,
-      inProgress: total - (resolved ?? 0), // D51 (the text counts as 0)
-      resolved,
-      progress: resolved === null ? null : ratio(resolved, total), // F51
-      resolvedSincePreviousSession: sincePrevious,
-      over6Months: over6,
-      over6MonthsShare: ratio(over6, total), // I51
-      statutoryDays: m.statutoryDays, // J51 (fixed)
-    }
-  })
-  const total3 = sum(rows3, (r) => r.total)
-  const resolved3 = sum(rows3, (r) => r.resolved ?? 0)
-  const over6m3 = sum(rows3, (r) => r.over6Months)
-  const totalRow3: Table3Row = {
-    ministry: 'Total',
-    total: total3,
-    inProgress: sum(rows3, (r) => r.inProgress),
-    resolved: resolved3,
-    progress: ratio(resolved3, total3),
-    resolvedSincePreviousSession: sum(rows3, (r) => r.resolvedSincePreviousSession ?? 0),
-    over6Months: over6m3,
-    over6MonthsShare: ratio(over6m3, total3),
-    statutoryDays: TOTAL_STATUTORY_DAYS,
-  }
-
-  // --- Table 4 (C70:P80) ---------------------------------------------------
-
-  /** D70: status Resuelto with resolution <= the session date, over Table 3's base. */
   const resolvedBy = (list: PermitRow[], date: string) =>
-    list.filter((p) => p.status === 'Resuelto' && p.resolution_date && p.resolution_date <= date).length
+    list.filter((p) => p.resolution_date && p.resolution_date <= date).length
 
-  /** P70: universe permits registered IN the current committee. */
+  /** H52 / P74: universe permits registered IN the current committee. */
   const addedNow = universe.filter(
     (p) => p.in_current_committee && p.filed_date && p.filed_date <= dateO,
   )
 
-  const rows4: Table4Row[] = TABLE_MINISTRIES.map((m) => {
+  const rows3: Table3Row[] = TABLE_MINISTRIES.map((m) => {
     const ps = ofMinistry(tableBase, m.label)
-    const noData = 'noData' in m && m.noData
+    const total = ps.length // C52
+    const resolvedTotal = m.noData ? null : resolvedBy(ps, dateO) // F52
     return {
       ministry: m.label,
-      total: ps.length, // C70
-      progressBySession: sessions.map((s) => (noData ? null : ratio(resolvedBy(ps, s.date), ps.length))),
-      added: ofMinistry(addedNow, m.label).length,
+      totalAtPrevious: total,
+      pendingAtPrevious: m.noData ? null : total - resolvedBy(ps, dateN), // D52
+      // E52: status Resuelto, resolved between the previous and current session.
+      resolvedBetween: m.noData
+        ? null
+        : ps.filter((p) => p.status === 'Resuelto' && p.resolution_date && p.resolution_date > dateN && p.resolution_date <= dateO).length,
+      resolvedTotal,
+      progress: resolvedTotal === null ? null : ratio(resolvedTotal, total), // G52
+      added: ofMinistry(addedNow, m.label).length, // H52
+      statutoryDays: m.statutoryDays, // I52 (fixed)
     }
   })
-  // Total row (D80): NOTE the sheet's numerator does NOT filter by ministry
+  // Row 65: plain SUMs (an empty cell counts as 0); progress = F65 / C65.
+  const total3 = sum(rows3, (r) => r.totalAtPrevious)
+  const resolved3 = sum(rows3, (r) => r.resolvedTotal ?? 0)
+  const totalRow3: Table3Row = {
+    ministry: 'Total',
+    totalAtPrevious: total3,
+    pendingAtPrevious: sum(rows3, (r) => r.pendingAtPrevious ?? 0),
+    resolvedBetween: sum(rows3, (r) => r.resolvedBetween ?? 0),
+    resolvedTotal: resolved3,
+    progress: ratio(resolved3, total3),
+    added: sum(rows3, (r) => r.added),
+    statutoryDays: null, // the sheet leaves it empty
+  }
+
+  // --- Table 4 (C74:P88) ---------------------------------------------------
+
+  /** D74: status Resuelto with resolution <= the session date, over Table 3's base. */
+  const resolvedStatusBy = (list: PermitRow[], date: string) =>
+    list.filter((p) => p.status === 'Resuelto' && p.resolution_date && p.resolution_date <= date).length
+
+  const rows4: Table4Row[] = TABLE_MINISTRIES.map((m) => {
+    const ps = ofMinistry(tableBase, m.label)
+    return {
+      ministry: m.label,
+      total: ps.length, // C74
+      // IFERROR(.../0, "") -> a ministry with no permits shows empty, not 0%.
+      progressBySession: sessions.map((s) =>
+        m.noData || ps.length === 0 ? null : resolvedStatusBy(ps, s.date) / ps.length,
+      ),
+      added: ofMinistry(addedNow, m.label).length, // P74
+    }
+  })
+  // Total row (D87): NOTE the sheet's numerator does NOT filter by ministry
   // (it counts resolved permits from all of them, including unlisted ones),
-  // but the denominator is the sum of the 10 rows. That is why the last
-  // session's % can differ slightly from Table 3's total progress.
-  // Replicated as is so it matches the sheet.
+  // but the denominator is the sum of the listed rows. Replicated as is so
+  // it matches the sheet.
   const total4 = sum(rows4, (r) => r.total)
   const totalRow4: Table4Row = {
     ministry: 'Total',
     total: total4,
-    progressBySession: sessions.map((s) => ratio(resolvedBy(tableBase, s.date), total4)),
+    progressBySession: sessions.map((s) => ratio(resolvedStatusBy(tableBase, s.date), total4)),
     added: sum(rows4, (r) => r.added),
   }
+  // Row 88, "Avance en puntos porcentuales": (E87 - D87) * 100.
+  const pointsGained = totalRow4.progressBySession.map((p, i) =>
+    i === 0 || p === null ? null : (p - (totalRow4.progressBySession[i - 1] ?? 0)) * 100,
+  )
 
   const permitsOutsideListedMinistries = tableBase.filter(
     (p) => !TABLE_MINISTRIES.some((m) => p.ministry?.startsWith(m.label)),
@@ -446,6 +464,7 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
   return {
     computedOn: dates.today,
     baselineDate: BASELINE_DATE,
+    secondBatchDate: SECOND_BATCH_DATE,
     currentSession: toSession(current),
     previousSession: previous && toSession(previous),
     sessions: sessions.map(toSession),
@@ -454,7 +473,7 @@ export async function fetchCommitteeTables(pool: Pool): Promise<CommitteeTables 
     table21,
     table22,
     table3: { rows: rows3, total: totalRow3 },
-    table4: { rows: rows4, total: totalRow4 },
+    table4: { rows: rows4, total: totalRow4, pointsGained },
     permitsOutsideListedMinistries,
   }
 }
