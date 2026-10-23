@@ -88,7 +88,11 @@ export const proyectos = pgTable(
     n_catastro: integer('n_catastro'),
     /** Si el proyecto está en el catastro de Hacienda (a nivel proyecto; distinto de `permisos.incluido_catastro_hacienda`, que es por permiso). */
     incluido_en_catastro: boolean('incluido_en_catastro'),
-    /** Si el proyecto está dentro del universo de seguimiento activo de OASI. */
+    /**
+     * Si el proyecto está dentro del universo de seguimiento activo de OASI.
+     * Se carga desde la columna "en_universo_2" (AG) de la hoja Proyectos,
+     * no desde la columna homónima "en_universo_permisos" (ver db/cargar_excel.py).
+     */
     en_universo_permisos: boolean('en_universo_permisos'),
     /** Seguimiento de contacto para proyectos ya liberados del catastro. Disperso en el Excel origen (108/326 con dato). */
     sigue_liberado_al_contactar: boolean('sigue_liberado_al_contactar'),

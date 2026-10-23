@@ -198,9 +198,14 @@ COLS_PROYECTOS = [
     "estado_ambiental", "etapa_proyecto", "fecha_inicio_construccion",
     "fecha_inicio_operacion", "habilitantes_aprobado", "observaciones_oasi",
     "fecha_ingreso", "fecha_ultima_resolucion", "n_catastro",
-    "incluido_en_catastro", "en_universo_permisos", "sigue_liberado_al_contactar",
+    "incluido_en_catastro", "en_universo_2", "sigue_liberado_al_contactar",
     "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados",
 ]
+# OJO: el universo del proyecto sale de "en_universo_2" (col. AG, 1/0), NO de
+# "en_universo_permisos" (Sí/No). Esta última solo dice si el proyecto tiene
+# algún permiso con en_universo = 1 y deja fuera al catastro 2; el universo
+# real de seguimiento (el que usan las Tablas PPT Actualizada) es AG. Se guarda
+# en la columna `proyectos.en_universo_permisos` de la base.
 # No se cargan (son cálculos que la app ya hace sola): cantidad_total_permisos,
 # permisos_pendientes, tiene_permisos_mas_6_meses, cien_pct_mas_6m_en_tramite,
 # proyecto_sin_permisos_pendientes_bbdd. Tampoco id_empresa / id_titular.
@@ -369,7 +374,7 @@ def armar(wb):
             rep["Proyecto sin etapa"].append(cod)
 
         flags = {}
-        for col in ("habilitantes_aprobado", "incluido_en_catastro", "en_universo_permisos",
+        for col in ("habilitantes_aprobado", "incluido_en_catastro", "en_universo_2",
                     "sigue_liberado_al_contactar", "listado_37_proyectos_liberados",
                     "listado_97_proyectos_no_iniciados"):
             v = si_no(f[col])
@@ -377,6 +382,8 @@ def armar(wb):
                 rep[f"Valor raro en '{col}' (queda vacío)"].append(f"{cod}: {f[col]!r}")
                 v = None
             flags[col] = v
+        # Columna de la planilla -> columna de la base (ver COLS_PROYECTOS).
+        flags["en_universo_permisos"] = flags.pop("en_universo_2")
 
         proyectos.append({
             "id_excel": cod,
