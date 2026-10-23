@@ -80,6 +80,13 @@ SIN_EMPRESA = "Sin empresa asignada"
 
 VACIOS = ("", "S/I", "-", "N/A", "s/i")
 
+# Valores que alguien del equipo escribe en "etapa_proyecto" como marcador
+# interno de pendiente, no como una etapa real del proyecto (planilla del
+# 08-10-2026: 46 proyectos con "REVISAR"). Nunca se agregan al catálogo de
+# etapas: se tratan como vacío y se listan en el reporte para que el equipo
+# los revise y ponga la etapa real.
+ETAPA_PLACEHOLDER = {"revisar", "pendiente", "por definir", "por confirmar", "tbd"}
+
 
 def texto(v):
     """Texto limpio. Vacío, 'S/I', '-', 'N/A' -> None. Números enteros sin '.0'."""
@@ -353,7 +360,10 @@ def armar(wb):
             rep["Tipología que no está en el catálogo (queda vacía)"].append(f"{cod}: {tipologia}")
             tipologia = None
         etapa = texto(f["etapa_proyecto"])
-        if etapa and etapa not in etapas:
+        if etapa and etapa.strip().lower() in ETAPA_PLACEHOLDER:
+            rep[f"Etapa marcada como pendiente de revisar en la planilla ('{etapa}', queda vacía)"].append(cod)
+            etapa = None
+        elif etapa and etapa not in etapas:
             raise PlanillaInvalida(f"{cod}: la etapa '{etapa}' no está en el catálogo (db/seed_catalogos.py, ETAPAS_PROYECTO).")
         if etapa is None:
             rep["Proyecto sin etapa"].append(cod)
@@ -405,6 +415,18 @@ def armar(wb):
             t["empresa_norm"] = None
 
     # --- PERMISOS ---
+    # Primera pasada: contar cuántas filas usan cada id_permiso. Antes se
+    # quedaba con la primera fila y descartaba el resto en silencio — pero en
+    # la planilla del 08-10-2026 la mayoría de estos casos NO son el mismo
+    # permiso repetido dos veces, son dos permisos REALES y distintos (de
+    # proyectos distintos) que por error de tipeo comparten el mismo código.
+    # Quedarse con cualquiera de las dos filas borra un permiso real del
+    # seguimiento sin que nadie lo note. Más seguro: no cargar NINGUNA de las
+    # filas en conflicto, y reportarlo fuerte para que se corrija el código
+    # en la planilla (no es algo que este script pueda decidir solo).
+    conteo_cod = Counter(texto(f["id_permiso"]) for f in filas_per if texto(f["id_permiso"]) is not None)
+    duplicados = {cod for cod, n in conteo_cod.items() if n > 1}
+
     permisos, vistos = [], set()
     habilitante_dudoso = Counter()
     for f in filas_per:
@@ -412,8 +434,15 @@ def armar(wb):
         if cod is None:
             rep["Permisos sin id_permiso (no se cargan)"].append(f"fila {f['_fila']}")
             continue
+        if cod in duplicados:
+            rep[
+                "id_permiso repetido en la planilla con datos DISTINTOS "
+                "(ningún permiso de ese código se carga hasta corregirlo)"
+            ].append(f"{cod} (fila {f['_fila']}, proyecto {texto(f['id_proyecto'])})")
+            continue
         if cod in vistos:
-            rep["id_permiso repetido (se usa la primera fila)"].append(cod)
+            # No debería pasar (ya separado arriba), pero por si dos filas
+            # fueran idénticas de verdad.
             continue
         vistos.add(cod)
 

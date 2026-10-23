@@ -113,9 +113,14 @@ export class NetworkStack extends cdk.Stack {
 
     const natInstance = new ec2.CfnInstance(this, 'NatInstance', {
       instanceType: SHARED.natInstanceType,
-      imageId: ec2.MachineImage.latestAmazonLinux2023({
-        cpuType: ec2.AmazonLinuxCpuType.ARM_64, // t4g es ARM
-      }).getImage(this).imageId,
+      // AMI FIJA a propósito (Amazon Linux 2023 ARM, la que corre desde el
+      // 21-09-2026). Antes era "latestAmazonLinux2023", que se resuelve en
+      // cada deploy: cuando Amazon publica una imagen nueva, CloudFormation
+      // intenta reemplazar la instancia, la nueva no puede tomar la interfaz
+      // de red (la sigue usando la vieja) y el deploy falla con
+      // "Interface ... in use". Para actualizar la imagen: cambiar este id Y
+      // la letra del overrideLogicalId de abajo, en un deploy planificado.
+      imageId: 'ami-007d8fad70c3dae04',
       networkInterfaces: [{ deviceIndex: '0', networkInterfaceId: natInterface.ref }],
       // Créditos "standard": una máquina que solo rutea nunca necesita
       // ráfagas, y así no puede generar cargos por CPU extra.
