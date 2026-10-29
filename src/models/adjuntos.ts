@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg'
 import type { UsuarioAutenticado } from '../middleware/auth'
-import { WhereBuilder, scopePermisos } from '../middleware/scope'
+import { WhereBuilder, scopePermisos, type ScopeOptions } from '../middleware/scope'
 import { adjuntos } from '../db/schema'
 
 /**
@@ -24,14 +24,18 @@ export interface AdjuntoConUsuario extends Adjunto {
   subido_por_nombre: string | null
 }
 
-/** Verifica que el permiso exista y esté dentro del scope del usuario. */
+/**
+ * Verifica que el permiso exista y esté dentro del scope del usuario.
+ * `forWrite` para subir/borrar: un permiso interregional ajeno se ve, pero no se toca.
+ */
 export async function permisoVisible(
   db: Pool | PoolClient,
   permisoId: number,
   user: UsuarioAutenticado,
+  opts: ScopeOptions = {},
 ): Promise<boolean> {
   const wb = new WhereBuilder()
-  scopePermisos(wb, user)
+  scopePermisos(wb, user, opts)
   wb.add((i) => `id = $${i}`, permisoId)
   const { rows } = await db.query(`SELECT id FROM v_permisos ${wb.where}`, wb.params)
   return rows.length > 0
