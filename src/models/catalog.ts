@@ -101,7 +101,8 @@ export async function listCompaniesWithProjects(db: Pool | PoolClient) {
   const { rows } = await db.query(`
     SELECT e.id, e.nombre AS name
       FROM empresas e
-     WHERE EXISTS (SELECT 1 FROM proyectos pr WHERE pr.empresa_id = e.id)
+     -- v_proyectos = only projects in the universe (migration 0012)
+     WHERE EXISTS (SELECT 1 FROM v_proyectos pr WHERE pr.empresa_id = e.id)
      ORDER BY e.nombre
   `)
   return rows
@@ -126,7 +127,7 @@ export async function listScopedProjectsForCatalog(db: Pool | PoolClient, scope:
        -- would hand back strings.
        COALESCE(
          (SELECT array_agg(DISTINCT pe.organismo_id)::int[]
-            FROM permisos pe WHERE pe.proyecto_id = pr.id),
+            FROM v_permisos pe WHERE pe.proyecto_id = pr.id),
          '{}'
        )                                          AS agency_ids
      FROM v_proyectos pr

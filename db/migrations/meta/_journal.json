@@ -57,6 +57,13 @@
       "when": 1793286392981,
       "tag": "0010_urgencia_proyectos",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1793287427107,
+      "tag": "0011_universo_por_defecto",
+      "breakpoints": true
     }
   ]
 }

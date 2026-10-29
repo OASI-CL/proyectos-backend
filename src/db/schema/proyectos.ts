@@ -92,8 +92,11 @@ export const proyectos = pgTable(
      * Si el proyecto está dentro del universo de seguimiento activo de OASI.
      * Se carga desde la columna "en_universo_2" (AG) de la hoja Proyectos,
      * no desde la columna homónima "en_universo_permisos" (ver db/cargar_excel.py).
+     * Es EL filtro de toda la app: las vistas v_proyectos / v_permisos solo
+     * muestran proyectos con true (ver migración 0012). Un proyecto creado
+     * desde la app entra al universo por defecto.
      */
-    en_universo_permisos: boolean('en_universo_permisos'),
+    en_universo_permisos: boolean('en_universo_permisos').default(true),
     /** Seguimiento de contacto para proyectos ya liberados del catastro. Disperso en el Excel origen (108/326 con dato). */
     sigue_liberado_al_contactar: boolean('sigue_liberado_al_contactar'),
     listado_37_proyectos_liberados: boolean('listado_37_proyectos_liberados'),
