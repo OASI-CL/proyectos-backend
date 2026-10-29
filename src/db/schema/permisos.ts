@@ -86,8 +86,9 @@ export const permisos = pgTable(
     // --- Columnas de la planilla "Levantamiento de Permisos" (22-09-2026) ---
     /**
      * Si el permiso está dentro del universo de seguimiento activo de OASI.
-     * Se carga desde la columna "en_universo_2" de la hoja Permisos (incluye
-     * el catastro 2), no desde "en_universo" (ver db/cargar_excel.py).
+     * Regla (definida por el equipo OASI): el permiso pertenece a un proyecto
+     * en universo (columna AG "en_universo_2" = 1 de la hoja Proyectos) Y
+     * tiene fecha de ingreso. Lo calcula db/cargar_excel.py al cargar.
      */
     en_universo: boolean('en_universo'),
     fecha_registro_catastro: date('fecha_registro_catastro', { mode: 'string' }),

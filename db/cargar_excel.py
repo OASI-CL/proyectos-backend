@@ -200,12 +200,15 @@ COLS_PROYECTOS = [
     "fecha_ingreso", "fecha_ultima_resolucion", "n_catastro",
     "incluido_en_catastro", "en_universo_2", "sigue_liberado_al_contactar",
     "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados",
+    "Urgencia",
 ]
-# OJO: el universo del proyecto sale de "en_universo_2" (col. AG, 1/0), NO de
-# "en_universo_permisos" (Sí/No). Esta última solo dice si el proyecto tiene
-# algún permiso con en_universo = 1 y deja fuera al catastro 2; el universo
-# real de seguimiento (el que usan las Tablas PPT Actualizada) es AG. Se guarda
-# en la columna `proyectos.en_universo_permisos` de la base.
+# UNIVERSO (regla del equipo OASI):
+#   - proyecto en universo = columna AG "en_universo_2" = 1. NO
+#     "en_universo_permisos" (Sí/No), que deja fuera al catastro 2. Se guarda
+#     en la columna `proyectos.en_universo_permisos` de la base.
+#   - permiso en universo = su proyecto está en universo Y tiene fecha de
+#     ingreso. No se lee de la hoja Permisos: se calcula en SQL al final de la
+#     carga, para TODOS los permisos de la base (ver generar_sql).
 # No se cargan (son cálculos que la app ya hace sola): cantidad_total_permisos,
 # permisos_pendientes, tiene_permisos_mas_6_meses, cien_pct_mas_6m_en_tramite,
 # proyecto_sin_permisos_pendientes_bbdd. Tampoco id_empresa / id_titular.
@@ -216,7 +219,7 @@ COLS_PERMISOS = [
     "que_habilita", "id_proyecto", "estado", "fecha_ingreso",
     "fecha_resolucion_estimada", "fecha_resolucion", "tipo_resolucion",
     "hito_tramitacion", "es_permiso_habilitante_construccion", "observaciones",
-    "n_catastro", "en_universo_2", "fecha_registro_catastro", "comite_registro",
+    "n_catastro", "fecha_registro_catastro", "comite_registro",
     "fecha_actualizacion", "quien_actualizo", "incluido_catastro_hacienda",
 ]
 # No se cargan: ministerio (sale del catálogo de organismos), nombre_proyecto,
@@ -405,6 +408,7 @@ def armar(wb):
             "fecha_ultima_resolucion": fecha(f["fecha_ultima_resolucion"]),
             "observaciones_oasi": texto(f["observaciones_oasi"]),
             "n_catastro": entero(f["n_catastro"]),
+            "urgencia": texto(f["Urgencia"]),
             **flags,
         })
 
@@ -484,16 +488,12 @@ def armar(wb):
             hab = False
 
         flags = {}
-        for col in ("en_universo_2", "incluido_catastro_hacienda"):
+        for col in ("incluido_catastro_hacienda",):
             v = si_no(f[col])
             if v == "dudoso":
                 rep[f"Valor raro en '{col}' (queda vacío)"].append(f"{cod}: {f[col]!r}")
                 v = None
             flags[col] = v
-        # Igual que en proyectos: el universo del permiso sale de
-        # "en_universo_2" (incluye catastro 2), no de "en_universo" (solo
-        # catastro 1). Se guarda en la columna `permisos.en_universo`.
-        flags["en_universo"] = flags.pop("en_universo_2")
 
         n_com = comite_numero(f["comite_registro"])
         if n_com is not None and n_com not in comites:
@@ -580,7 +580,7 @@ def generar_sql(d, archivo_excel):
               "estado_ambiental", "fecha_inicio_construccion", "fecha_inicio_operacion",
               "habilitantes_aprobado", "fecha_ingreso", "fecha_ultima_resolucion", "observaciones_oasi",
               "n_catastro", "incluido_en_catastro", "en_universo_permisos", "sigue_liberado_al_contactar",
-              "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados"]
+              "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados", "urgencia"]
     for p in d["proyectos"]:
         vals = [
             lit(p["id_excel"]), lit(p["nombre"]), lit(p["titular"]),
@@ -604,7 +604,7 @@ def generar_sql(d, archivo_excel):
               "codigo_cpat", "nombre_decreto", "tipo_permiso", "n_expediente", "que_habilita",
               "habilitante_construccion", "fecha_ingreso", "fecha_resolucion_estimada",
               "fecha_resolucion", "tipo_resolucion", "hito_tramitacion", "observaciones", "n_catastro",
-              "en_universo", "incluido_catastro_hacienda", "fecha_registro_catastro",
+              "incluido_catastro_hacienda", "fecha_registro_catastro",
               "fecha_actualizacion", "quien_actualizo"]
     for m in d["permisos"]:
         vals = [
@@ -630,6 +630,17 @@ def generar_sql(d, archivo_excel):
             f"({_id_por('permisos', 'id_excel', m['id_excel'])}, {_id_por('comites', 'numero', m['comite'])}) "
             f"ON CONFLICT (permiso_id, comite_id) DO NOTHING;"
         )
+
+    # Regla de universo del permiso (ver COLS_PROYECTOS): proyecto en
+    # universo + fecha de ingreso. Se recalcula para TODOS los permisos de la
+    # base, no solo los de esta planilla, así ninguno queda con un valor viejo
+    # (ej. los que ya no vienen en el Excel).
+    s.append("\n-- UNIVERSO DE PERMISOS: proyecto en universo (col. AG) y con fecha de ingreso")
+    s.append(
+        "UPDATE permisos p SET en_universo = (pr.en_universo_permisos IS TRUE AND p.fecha_ingreso IS NOT NULL) "
+        "FROM proyectos pr WHERE pr.id = p.proyecto_id "
+        "AND p.en_universo IS DISTINCT FROM (pr.en_universo_permisos IS TRUE AND p.fecha_ingreso IS NOT NULL);"
+    )
     return "\n".join(s) + "\n"
 
 

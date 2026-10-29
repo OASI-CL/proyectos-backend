@@ -98,6 +98,14 @@ export const proyectos = pgTable(
     sigue_liberado_al_contactar: boolean('sigue_liberado_al_contactar'),
     listado_37_proyectos_liberados: boolean('listado_37_proyectos_liberados'),
     listado_97_proyectos_no_iniciados: boolean('listado_97_proyectos_no_iniciados'),
+    /**
+     * Prioridad del proyecto según la columna "Urgencia" de la hoja Proyectos
+     * (ej. "Próximos a iniciar construcción 1", "Inversión y Empleo"). La
+     * planilla la calcula con la hoja "Proyectos Selección Hacienda" y los
+     * umbrales de Parámetros; se guarda tal cual (texto) porque la usa la
+     * frase resumen de las Tablas del comité. NULL = sin prioridad.
+     */
+    urgencia: text('urgencia'),
 
     ...auditoria,
   },
