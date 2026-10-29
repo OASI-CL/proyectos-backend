@@ -206,9 +206,13 @@ COLS_PROYECTOS = [
 #   - proyecto en universo = columna AG "en_universo_2" = 1. NO
 #     "en_universo_permisos" (Sí/No), que deja fuera al catastro 2. Se guarda
 #     en la columna `proyectos.en_universo_permisos` de la base.
-#   - permiso en universo = su proyecto está en universo Y tiene fecha de
-#     ingreso. No se lee de la hoja Permisos: se calcula en SQL al final de la
-#     carga, para TODOS los permisos de la base (ver generar_sql).
+#   - permiso en universo = la regla de la planilla (Permisos[en_universo_2]):
+#     su proyecto está en universo, no está "Descartado" y no se resolvió
+#     antes de la línea base. Se calcula en SQL al final de la carga, para
+#     TODOS los permisos de la base (ver generar_sql).
+#     OJO: "tiene fecha de ingreso" NO es parte del universo; es un filtro
+#     propio de las Tablas del comité (src/models/committeeTables.ts).
+FECHA_LINEA_BASE = "2026-05-08"  # 'Tablas PPT'!C7 de la planilla
 # No se cargan (son cálculos que la app ya hace sola): cantidad_total_permisos,
 # permisos_pendientes, tiene_permisos_mas_6_meses, cien_pct_mas_6m_en_tramite,
 # proyecto_sin_permisos_pendientes_bbdd. Tampoco id_empresa / id_titular.
@@ -631,15 +635,19 @@ def generar_sql(d, archivo_excel):
             f"ON CONFLICT (permiso_id, comite_id) DO NOTHING;"
         )
 
-    # Regla de universo del permiso (ver COLS_PROYECTOS): proyecto en
-    # universo + fecha de ingreso. Se recalcula para TODOS los permisos de la
-    # base, no solo los de esta planilla, así ninguno queda con un valor viejo
-    # (ej. los que ya no vienen en el Excel).
-    s.append("\n-- UNIVERSO DE PERMISOS: proyecto en universo (col. AG) y con fecha de ingreso")
+    # Regla de universo del permiso = la de la planilla, Permisos[en_universo_2]
+    # (ver COLS_PROYECTOS). Se recalcula para TODOS los permisos de la base,
+    # no solo los de esta planilla, así ninguno queda con un valor viejo
+    # (ej. los que ya no vienen en el Excel). Misma regla que las vistas (0013).
+    regla = (
+        "(pr.en_universo_permisos IS TRUE AND ep.nombre <> 'Descartado' "
+        f"AND NOT COALESCE(p.fecha_resolucion < DATE '{FECHA_LINEA_BASE}', false))"
+    )
+    s.append("\n-- UNIVERSO DE PERMISOS: regla de la planilla (en_universo_2)")
     s.append(
-        "UPDATE permisos p SET en_universo = (pr.en_universo_permisos IS TRUE AND p.fecha_ingreso IS NOT NULL) "
-        "FROM proyectos pr WHERE pr.id = p.proyecto_id "
-        "AND p.en_universo IS DISTINCT FROM (pr.en_universo_permisos IS TRUE AND p.fecha_ingreso IS NOT NULL);"
+        f"UPDATE permisos p SET en_universo = {regla} "
+        "FROM proyectos pr, estados_permiso ep WHERE pr.id = p.proyecto_id AND ep.id = p.estado_id "
+        f"AND p.en_universo IS DISTINCT FROM {regla};"
     )
     return "\n".join(s) + "\n"
 
