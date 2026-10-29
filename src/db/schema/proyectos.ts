@@ -88,12 +88,27 @@ export const proyectos = pgTable(
     n_catastro: integer('n_catastro'),
     /** Si el proyecto está en el catastro de Hacienda (a nivel proyecto; distinto de `permisos.incluido_catastro_hacienda`, que es por permiso). */
     incluido_en_catastro: boolean('incluido_en_catastro'),
-    /** Si el proyecto está dentro del universo de seguimiento activo de OASI. */
-    en_universo_permisos: boolean('en_universo_permisos'),
+    /**
+     * Si el proyecto está dentro del universo de seguimiento activo de OASI.
+     * Se carga desde la columna "en_universo_2" (AG) de la hoja Proyectos,
+     * no desde la columna homónima "en_universo_permisos" (ver db/cargar_excel.py).
+     * Es EL filtro de toda la app: las vistas v_proyectos / v_permisos solo
+     * muestran proyectos con true (ver migración 0012). Un proyecto creado
+     * desde la app entra al universo por defecto.
+     */
+    en_universo_permisos: boolean('en_universo_permisos').default(true),
     /** Seguimiento de contacto para proyectos ya liberados del catastro. Disperso en el Excel origen (108/326 con dato). */
     sigue_liberado_al_contactar: boolean('sigue_liberado_al_contactar'),
     listado_37_proyectos_liberados: boolean('listado_37_proyectos_liberados'),
     listado_97_proyectos_no_iniciados: boolean('listado_97_proyectos_no_iniciados'),
+    /**
+     * Prioridad del proyecto según la columna "Urgencia" de la hoja Proyectos
+     * (ej. "Próximos a iniciar construcción 1", "Inversión y Empleo"). La
+     * planilla la calcula con la hoja "Proyectos Selección Hacienda" y los
+     * umbrales de Parámetros; se guarda tal cual (texto) porque la usa la
+     * frase resumen de las Tablas del comité. NULL = sin prioridad.
+     */
+    urgencia: text('urgencia'),
 
     ...auditoria,
   },
