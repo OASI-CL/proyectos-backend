@@ -216,7 +216,7 @@ COLS_PERMISOS = [
     "que_habilita", "id_proyecto", "estado", "fecha_ingreso",
     "fecha_resolucion_estimada", "fecha_resolucion", "tipo_resolucion",
     "hito_tramitacion", "es_permiso_habilitante_construccion", "observaciones",
-    "n_catastro", "en_universo", "fecha_registro_catastro", "comite_registro",
+    "n_catastro", "en_universo_2", "fecha_registro_catastro", "comite_registro",
     "fecha_actualizacion", "quien_actualizo", "incluido_catastro_hacienda",
 ]
 # No se cargan: ministerio (sale del catálogo de organismos), nombre_proyecto,
@@ -484,12 +484,16 @@ def armar(wb):
             hab = False
 
         flags = {}
-        for col in ("en_universo", "incluido_catastro_hacienda"):
+        for col in ("en_universo_2", "incluido_catastro_hacienda"):
             v = si_no(f[col])
             if v == "dudoso":
                 rep[f"Valor raro en '{col}' (queda vacío)"].append(f"{cod}: {f[col]!r}")
                 v = None
             flags[col] = v
+        # Igual que en proyectos: el universo del permiso sale de
+        # "en_universo_2" (incluye catastro 2), no de "en_universo" (solo
+        # catastro 1). Se guarda en la columna `permisos.en_universo`.
+        flags["en_universo"] = flags.pop("en_universo_2")
 
         n_com = comite_numero(f["comite_registro"])
         if n_com is not None and n_com not in comites:
