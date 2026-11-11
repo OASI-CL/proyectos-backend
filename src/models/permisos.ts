@@ -146,14 +146,41 @@ export async function listPermisosPaginado(
   return rows
 }
 
+/**
+ * Rows for the "Exportar a Excel" button of the Permisos page: the PENDING
+ * permits that match the page filters (the caller adds the pending filter),
+ * with the permit, its agency/ministry and its project (owner, company,
+ * sector, region, investment, jobs). The .xlsx itself is built in the browser.
+ *
+ * The filters (`wb`) are written against v_permisos column names, so they go
+ * inside a subquery: joining proyectos directly would make names like
+ * region_id or fecha_ingreso ambiguous.
+ */
 export async function listPermisosParaExport(db: Pool | PoolClient, wb: WhereBuilder) {
   const { rows } = await db.query(
-    `SELECT id_excel, nombre, organismo_nombre, ministerio_nombre, proyecto_id_excel,
-            proyecto_nombre, empresa_nombre, region, sector, estado, fecha_ingreso,
-            fecha_resolucion, dias_tramitacion, semaforo, critico, habilitante_construccion,
-            n_expediente, observaciones
-       FROM v_permisos ${wb.where}
-      ORDER BY dias_tramitacion DESC NULLS LAST`,
+    `SELECT v.id_excel             AS permit_code,
+            v.organismo_nombre     AS agency,
+            v.ministerio_nombre    AS ministry,
+            v.nombre               AS permit_name,
+            v.tipo_permiso         AS permit_type,
+            v.n_expediente         AS file_number,
+            v.estado               AS status,
+            v.fecha_ingreso        AS submitted_on,
+            v.dias_tramitacion     AS days_in_process,
+            v.semaforo             AS traffic_light,
+            v.habilitante_construccion AS enables_construction,
+            v.proyecto_id_excel    AS project_code,
+            v.proyecto_nombre      AS project_name,
+            pr.titular             AS owner,
+            v.empresa_nombre       AS company,
+            v.sector,
+            v.region,
+            v.inversion_mmusd::float8  AS investment_mmusd,
+            pr.empleo_construccion AS construction_jobs,
+            pr.empleo_operacion    AS operation_jobs
+       FROM (SELECT * FROM v_permisos ${wb.where}) v
+       JOIN proyectos pr ON pr.id = v.proyecto_id
+      ORDER BY v.dias_tramitacion DESC NULLS LAST, v.id_excel`,
     wb.params,
   )
   return rows
