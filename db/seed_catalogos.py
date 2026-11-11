@@ -95,6 +95,9 @@ ORGANISMOS = [
     (24, "TGR", "Tesorería General de la República", "Ministerio de Hacienda"),
     (25, "SMA", "Superintendencia del Medio Ambiente", "Ministerio de Medio Ambiente"),
     (26, "DIRECCIÓN DE TRANSITO", "Dirección de Tránsito", "Ministerio de Transportes y Telecomunicaciones"),
+    # Agregado con la planilla del 02-11-2026 (PM2575, PM2576). Ministerio
+    # según la columna "ministerio" de Permisos y la hoja Parámetros.
+    (27, "SEREMI VIVIENDA", "Secretaría Regional Ministerial de Vivienda y Urbanismo", "Ministerio de Vivienda y Urbanismo"),
 ]
 
 # Cómo escribe la planilla algunos organismos -> sigla en el catálogo.
