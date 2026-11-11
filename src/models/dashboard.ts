@@ -215,6 +215,40 @@ export interface DashboardData {
   permitsByRegion: Record<string, unknown>[]
   permitStatus: Record<string, unknown>[]
   criticalPermits: Record<string, unknown>[]
+  interregional: InterregionalBox
+}
+
+/**
+ * "Proyectos interregionales" box: projects that span several regions, with
+ * their permits. EVERYONE sees it, the same for every role and regardless of
+ * the dashboard filters — on purpose it does NOT go through buildScope.
+ */
+export interface InterregionalBox {
+  projects: Record<string, unknown>[]
+  permits: Record<string, unknown>[]
+}
+
+async function fetchInterregional(db: Pool | PoolClient): Promise<InterregionalBox> {
+  const [projects, permits] = await Promise.all([
+    db.query(`
+      SELECT pr.id, pr.id_excel AS code, pr.nombre AS name, pr.empresa_nombre AS company,
+             pr.sector, pr.etapa AS project_status,
+             COALESCE(pr.inversion_mmusd, 0)::float8 AS investment_mmusd,
+             COALESCE(pr.empleo_construccion, 0)::int AS construction_jobs,
+             pr.total_permisos::int AS permit_count,
+             pr.permisos_pendientes::int AS pending_permit_count
+        FROM v_proyectos pr
+       WHERE pr.region = 'Interregional'
+       ORDER BY pr.inversion_mmusd DESC NULLS LAST`),
+    db.query(`
+      SELECT p.id, p.id_excel AS code, p.nombre AS name, p.proyecto_id AS project_id,
+             p.organismo_nombre AS agency, p.estado AS status, p.semaforo AS traffic_light,
+             p.fecha_ingreso AS submitted_on, p.dias_tramitacion AS days_in_process
+        FROM v_permisos p
+       WHERE p.region = 'Interregional'
+       ORDER BY p.proyecto_id, p.estado_es_final, p.dias_tramitacion DESC NULLS LAST`),
+  ])
+  return { projects: projects.rows, permits: permits.rows }
 }
 
 /** Runs every dashboard section query against the shared filtered universe. */
@@ -238,6 +272,7 @@ export async function fetchDashboard(
     permitsByRegion,
     permitStatus,
     criticalPermits,
+    interregional,
   ] = await Promise.all([
     // --- 2. Top summary ---
     run(`
@@ -412,6 +447,9 @@ export async function fetchDashboard(
         pm.overdue_days DESC NULLS LAST,
         pm.submitted_on DESC NULLS LAST
     `),
+
+    // --- 12. Interregional box (no filters, no role scope) ---
+    fetchInterregional(db),
   ])
 
   return {
@@ -426,5 +464,6 @@ export async function fetchDashboard(
     permitsByRegion: permitsByRegion.rows,
     permitStatus: permitStatus.rows,
     criticalPermits: criticalPermits.rows,
+    interregional,
   }
 }

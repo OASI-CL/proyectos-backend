@@ -14,7 +14,29 @@ import type { UsuarioAutenticado } from './auth'
  * | organismo | permits of its agency + those projects        | needs approval   |
  * | empresa   | its own projects + their permits              | needs approval   |
  * | region    | every project of its region, all agencies     | read-only        |
+ *
+ * On top of that, EVERY role sees the "Interregional" projects (and their
+ * permits): they span several regions, so they concern everyone. The
+ * dashboard shows them in a box of their own (see models/dashboard.ts).
  */
+
+/** Region id of the "Interregional" catalog row (db/seed_catalogos.py). */
+export const INTERREGIONAL_REGION_SQL = `(SELECT id FROM regiones WHERE nombre = 'Interregional')`
+
+/**
+ * Options for the scope helpers. `forWrite: true` is for checks that guard a
+ * write (editing a permit, adding one, uploading an attachment): seeing an
+ * interregional project does NOT mean being allowed to change it, so the
+ * interregional exception is left out there.
+ */
+export interface ScopeOptions {
+  forWrite?: boolean
+}
+
+/** `(own scope) OR interregional`, for a scoped role (reads only). */
+function ownOrInterregional(own: string, opts: ScopeOptions): string {
+  return opts.forWrite ? own : `(${own} OR region_id = ${INTERREGIONAL_REGION_SQL})`
+}
 
 export interface Condicion {
   sql: string
@@ -64,13 +86,13 @@ export class WhereBuilder {
  * The region filter is on `region_id`, not on the region name: an indexed
  * integer comparison that cannot drift with accents or spelling.
  */
-export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado) {
+export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado, opts: ScopeOptions = {}) {
   if (user.rol === 'empresa') {
-    wb.add((n) => `empresa_id = $${n}`, user.empresaId ?? -1)
+    wb.add((n) => ownOrInterregional(`empresa_id = $${n}`, opts), user.empresaId ?? -1)
   } else if (user.rol === 'organismo') {
-    wb.add((n) => `organismo_id = $${n}`, user.organismoId ?? -1)
+    wb.add((n) => ownOrInterregional(`organismo_id = $${n}`, opts), user.organismoId ?? -1)
   } else if (user.rol === 'region') {
-    wb.add((n) => `region_id = $${n}`, user.regionId ?? -1)
+    wb.add((n) => ownOrInterregional(`region_id = $${n}`, opts), user.regionId ?? -1)
   }
   return wb
 }
@@ -81,16 +103,16 @@ export function scopePermisos(wb: WhereBuilder, user: UsuarioAutenticado) {
  * An 'organismo' user only sees projects that have at least one permit in its
  * agency — otherwise it would see the whole project universe.
  */
-export function scopeProyectos(wb: WhereBuilder, user: UsuarioAutenticado) {
+export function scopeProyectos(wb: WhereBuilder, user: UsuarioAutenticado, opts: ScopeOptions = {}) {
   if (user.rol === 'empresa') {
-    wb.add((n) => `empresa_id = $${n}`, user.empresaId ?? -1)
+    wb.add((n) => ownOrInterregional(`empresa_id = $${n}`, opts), user.empresaId ?? -1)
   } else if (user.rol === 'organismo') {
     wb.add(
-      (n) => `id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = $${n})`,
+      (n) => ownOrInterregional(`id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = $${n})`, opts),
       user.organismoId ?? -1,
     )
   } else if (user.rol === 'region') {
-    wb.add((n) => `region_id = $${n}`, user.regionId ?? -1)
+    wb.add((n) => ownOrInterregional(`region_id = $${n}`, opts), user.regionId ?? -1)
   }
   return wb
 }

@@ -138,9 +138,10 @@ router.patch('/:id', async (req, res, next) => {
   // --- Roles that need approval: queue instead of writing -------------------
   if (requiereAprobacion(user)) {
     try {
-      // Scope check first: you can only propose changes on what you can see.
+      // Scope check first: you can only propose changes on what is yours
+      // (forWrite: seeing an interregional permit is not enough to edit it).
       const wbScope = new WhereBuilder()
-      scopePermisos(wbScope, user)
+      scopePermisos(wbScope, user, { forWrite: true })
       const visible = await permisoVisibleId(pool, wbScope, id)
       if (!visible) {
         return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })

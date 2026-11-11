@@ -78,6 +78,10 @@ router.get('/', async (req, res, next) => {
       permitsByRegion: camelizeRows(data.permitsByRegion),
       permitStatus: camelizeRows(data.permitStatus),
       criticalPermits: camelizeRows(data.criticalPermits),
+      interregional: {
+        projects: camelizeRows(data.interregional.projects),
+        permits: camelizeRows(data.interregional.permits),
+      },
     })
   } catch (err) {
     next(err)

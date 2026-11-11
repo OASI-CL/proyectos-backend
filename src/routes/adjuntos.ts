@@ -79,7 +79,7 @@ router.post('/permiso/:permisoId/url-subida', async (req, res, next) => {
     }
 
     const permisoId = Number(req.params.permisoId)
-    if (!(await permisoVisible(pool, permisoId, req.user!))) {
+    if (!(await permisoVisible(pool, permisoId, req.user!, { forWrite: true }))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
     }
 
@@ -115,7 +115,7 @@ router.post('/permiso/:permisoId', async (req, res, next) => {
     }
 
     const permisoId = Number(req.params.permisoId)
-    if (!(await permisoVisible(pool, permisoId, req.user!))) {
+    if (!(await permisoVisible(pool, permisoId, req.user!, { forWrite: true }))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Permiso no encontrado' })
     }
 
@@ -153,7 +153,7 @@ router.delete('/:id', async (req, res, next) => {
     if (!adjunto) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Adjunto no encontrado' })
     }
-    if (!(await permisoVisible(pool, adjunto.permiso_id, req.user!))) {
+    if (!(await permisoVisible(pool, adjunto.permiso_id, req.user!, { forWrite: true }))) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Adjunto no encontrado' })
     }
 

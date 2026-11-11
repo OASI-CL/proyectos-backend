@@ -603,6 +603,19 @@ def generar_sql(d, archivo_excel):
             f"DO UPDATE SET {updates}, updated_by = EXCLUDED.updated_by;"
         )
 
+    # Un proyecto del Excel que ya NO viene en la planilla no se borra (puede
+    # tener historial), pero sale del universo: si quedara con su valor
+    # anterior, la app lo seguiría mostrando aunque el equipo lo sacó (pasó con
+    # P650 y P653 en la planilla del 02-11-2026). Los creados desde la app
+    # (id_excel NULL) no se tocan.
+    codigos = ", ".join(lit(p["id_excel"]) for p in d["proyectos"])
+    s.append("\n-- PROYECTOS QUE YA NO VIENEN EN LA PLANILLA: fuera del universo (no se borran)")
+    s.append(
+        "UPDATE proyectos SET en_universo_permisos = false "
+        f"WHERE id_excel IS NOT NULL AND id_excel NOT IN ({codigos}) "
+        "AND en_universo_permisos IS DISTINCT FROM false;"
+    )
+
     s.append("\n-- PERMISOS (clave: id_excel 'PM1377'; proyecto por su 'P123', organismo por sigla, estado por nombre)")
     cols_m = ["id_excel", "proyecto_id", "organismo_id", "estado_id", "nombre", "nombre_estandar",
               "codigo_cpat", "nombre_decreto", "tipo_permiso", "n_expediente", "que_habilita",

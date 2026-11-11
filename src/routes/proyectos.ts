@@ -165,8 +165,9 @@ router.post('/:id/permisos', async (req, res, next) => {
     const proyectoId = Number(req.params.id)
 
     // El proyecto tiene que existir dentro del scope del usuario
+    // (forWrite: ver un proyecto interregional no basta para agregarle permisos)
     const wb = new WhereBuilder()
-    scopeProyectos(wb, user)
+    scopeProyectos(wb, user, { forWrite: true })
     const existe = await proyectoVisibleId(pool, wb, proyectoId)
     if (!existe) {
       return res.status(404).json({ error: 'no_encontrado', message: 'Proyecto no encontrado' })
