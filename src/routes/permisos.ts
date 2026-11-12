@@ -1,5 +1,6 @@
 import { Router } from 'express'
 import { pool } from '../db/client'
+import { camelizeRows } from '../lib/camelize'
 import { WhereBuilder, scopePermisos, puedeEscribir, requiereAprobacion } from '../middleware/scope'
 import {
   ApprovalError,
@@ -48,7 +49,9 @@ router.get('/', async (req, res, next) => {
 })
 
 /**
- * GET /permisos/export — mismos filtros, devuelve CSV (se abre en Excel).
+ * GET /permisos/export — the PENDING permits matching the same filters as the
+ * list, as JSON. The browser turns them into the .xlsx (returning a binary
+ * file through API Gateway + Lambda is fragile, JSON is not).
  * Va antes de /:id para que 'export' no se interprete como un id.
  */
 router.get('/export', async (req, res, next) => {
@@ -56,25 +59,11 @@ router.get('/export', async (req, res, next) => {
     const wb = new WhereBuilder()
     scopePermisos(wb, req.user!)
     filtrosPermisos(wb, req.query as Record<string, unknown>)
+    // Only pending permits are exported, whatever the page shows.
+    wb.addRaw(`estado_codigo = 'pendiente'`)
 
     const rows = await listPermisosParaExport(pool, wb)
-
-    const columnas = rows.length > 0 ? Object.keys(rows[0]) : []
-    const escapar = (v: unknown) => {
-      if (v === null || v === undefined) return ''
-      const s = String(v).replace(/"/g, '""')
-      return /[",;\n]/.test(s) ? `"${s}"` : s
-    }
-
-    // BOM para que Excel reconozca UTF-8, y ; como separador (locale es-CL)
-    const csv = [
-      columnas.join(';'),
-      ...rows.map((r) => columnas.map((c) => escapar(r[c])).join(';')),
-    ].join('\n')
-
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
-    res.setHeader('Content-Disposition', 'attachment; filename="permisos.csv"')
-    res.send('﻿' + csv)
+    res.json({ data: camelizeRows(rows) })
   } catch (err) {
     next(err)
   }
