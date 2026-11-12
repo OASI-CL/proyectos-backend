@@ -13,7 +13,7 @@ import type { UsuarioAutenticado } from './auth'
  * | oasi      | everything                                   | direct, approves |
  * | organismo | permits of its agency + those projects        | needs approval   |
  * | empresa   | its own projects + their permits              | needs approval   |
- * | region    | every project of its region, all agencies     | read-only        |
+ * | region    | its region + interregional, all agencies      | read-only        |
  *
  * On top of that, EVERY role sees the "Interregional" projects (and their
  * permits): they span several regions, so they concern everyone. The

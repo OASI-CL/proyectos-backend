@@ -6,6 +6,7 @@ import {
   rcaStatusSql,
 } from '../db/sql'
 import type { UsuarioAutenticado } from '../middleware/auth'
+import { INTERREGIONAL_REGION_SQL } from '../middleware/scope'
 
 // ----------------------------------------------------------------------------
 // Global filters
@@ -62,11 +63,13 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
     permitWhere.push(`p.organismo_id = ${agency}`)
     projectWhere.push(`pr.id IN (SELECT proyecto_id FROM permisos WHERE organismo_id = ${agency})`)
   } else if (user.rol === 'region') {
-    // Sees every project of its region, across all agencies. Scoped by
-    // region_id (indexed integer) rather than by the region name.
+    // Sees every project of its region AND the interregional ones, across all
+    // agencies (the interregional box is shown to everyone anyway; here they
+    // also count in its numbers, charts and map). Scoped by region_id
+    // (indexed integer) rather than by the region name.
     const region = sql.add(user.regionId ?? -1)
-    permitWhere.push(`p.region_id = ${region}`)
-    projectWhere.push(`pr.region_id = ${region}`)
+    permitWhere.push(`(p.region_id = ${region} OR p.region_id = ${INTERREGIONAL_REGION_SQL})`)
+    projectWhere.push(`(pr.region_id = ${region} OR pr.region_id = ${INTERREGIONAL_REGION_SQL})`)
   }
 
   // --- Permit-level filters ---
