@@ -15,16 +15,25 @@ import { INTERREGIONAL_REGION_SQL } from '../middleware/scope'
 // section 12): every section recomputes against the same filtered universe.
 // ----------------------------------------------------------------------------
 
+/**
+ * Every filter except the date range is MULTI-VALUE: the user can pick
+ * several agencies, regions, sectors... at once. Values of the same filter
+ * are OR'ed (agency CMN or SAG); different filters are AND'ed (CMN or SAG,
+ * AND in Interregional). In the query string they come joined by
+ * MULTI_VALUE_SEPARATOR (see routes/dashboard.ts).
+ */
+export const MULTI_VALUE_SEPARATOR = '|'
+
 export interface DashboardFilters {
-  ministryId?: number
-  agencyId?: number
-  sector?: string
-  region?: string
-  projectStatus?: string
-  permitStatus?: string
-  companyId?: number
-  projectId?: number
-  rcaStatus?: string
+  ministryId?: number[]
+  agencyId?: number[]
+  sector?: string[]
+  region?: string[]
+  projectStatus?: string[]
+  permitStatus?: string[]
+  companyId?: number[]
+  projectId?: number[]
+  rcaStatus?: string[]
   /** ISO date (YYYY-MM-DD). Filters on proyectos.fecha_inicio_construccion. */
   startDateFrom?: string
   startDateTo?: string
@@ -72,47 +81,50 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
     projectWhere.push(`(pr.region_id = ${region} OR pr.region_id = ${INTERREGIONAL_REGION_SQL})`)
   }
 
+  // Each multi-value filter becomes `column = ANY($n)` (the parameter is an
+  // array): matches any of the picked values.
+
   // --- Permit-level filters ---
   if (filters.ministryId !== undefined) {
-    permitWhere.push(`p.ministerio_id = ${sql.add(filters.ministryId)}`)
+    permitWhere.push(`p.ministerio_id = ANY(${sql.add(filters.ministryId)})`)
   }
   if (filters.agencyId !== undefined) {
-    permitWhere.push(`p.organismo_id = ${sql.add(filters.agencyId)}`)
+    permitWhere.push(`p.organismo_id = ANY(${sql.add(filters.agencyId)})`)
   }
 
   // --- Project-level filters: applied to both sides so the two universes
   //     always describe the same selection ---
   if (filters.sector !== undefined) {
     const value = sql.add(filters.sector)
-    permitWhere.push(`p.sector = ${value}`)
-    projectWhere.push(`pr.sector = ${value}`)
+    permitWhere.push(`p.sector = ANY(${value})`)
+    projectWhere.push(`pr.sector = ANY(${value})`)
   }
   if (filters.region !== undefined) {
     const value = sql.add(filters.region)
-    permitWhere.push(`p.region = ${value}`)
-    projectWhere.push(`pr.region = ${value}`)
+    permitWhere.push(`p.region = ANY(${value})`)
+    projectWhere.push(`pr.region = ANY(${value})`)
   }
   if (filters.projectStatus !== undefined) {
     const value = sql.add(filters.projectStatus)
-    permitWhere.push(`p.etapa = ${value}`)
-    projectWhere.push(`pr.etapa = ${value}`)
+    permitWhere.push(`p.etapa = ANY(${value})`)
+    projectWhere.push(`pr.etapa = ANY(${value})`)
   }
   if (filters.companyId !== undefined) {
     const value = sql.add(filters.companyId)
-    permitWhere.push(`p.empresa_id = ${value}`)
-    projectWhere.push(`pr.empresa_id = ${value}`)
+    permitWhere.push(`p.empresa_id = ANY(${value})`)
+    projectWhere.push(`pr.empresa_id = ANY(${value})`)
   }
   if (filters.projectId !== undefined) {
     const value = sql.add(filters.projectId)
-    permitWhere.push(`p.proyecto_id = ${value}`)
-    projectWhere.push(`pr.id = ${value}`)
+    permitWhere.push(`p.proyecto_id = ANY(${value})`)
+    projectWhere.push(`pr.id = ANY(${value})`)
   }
   if (filters.rcaStatus !== undefined) {
     const value = sql.add(filters.rcaStatus)
-    projectWhere.push(`(${rcaStatusSql('pr.estado_ambiental')}) = ${value}`)
+    projectWhere.push(`(${rcaStatusSql('pr.estado_ambiental')}) = ANY(${value})`)
     permitWhere.push(
       `p.proyecto_id IN (SELECT id FROM proyectos
-         WHERE (${rcaStatusSql('estado_ambiental')}) = ${value})`,
+         WHERE (${rcaStatusSql('estado_ambiental')}) = ANY(${value}))`,
     )
   }
   // Project start date range (fecha_inicio_construccion). Projects with no
@@ -135,7 +147,7 @@ export function buildScope(user: UsuarioAutenticado, filters: DashboardFilters) 
   // --- Tracking-state filter, applied after the CASE is computed ---
   const trackingWhere =
     filters.permitStatus !== undefined
-      ? `WHERE tracking_status = ${sql.add(filters.permitStatus)}`
+      ? `WHERE tracking_status = ANY(${sql.add(filters.permitStatus)})`
       : ''
 
   // --- Projects must still have a matching permit when a permit-level

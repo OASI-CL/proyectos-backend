@@ -2,7 +2,7 @@ import { Router } from 'express'
 import type { Request } from 'express'
 import { pool } from '../db/client'
 import { camelizeRow, camelizeRows } from '../lib/camelize'
-import { fetchDashboard, type DashboardFilters } from '../models/dashboard'
+import { fetchDashboard, MULTI_VALUE_SEPARATOR, type DashboardFilters } from '../models/dashboard'
 
 const router = Router()
 
@@ -12,23 +12,27 @@ function parseFilters(req: Request): DashboardFilters {
     const value = q[key]
     return typeof value === 'string' && value.trim() !== '' ? value : undefined
   }
-  const num = (key: string): number | undefined => {
-    const value = str(key)
-    if (value === undefined) return undefined
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : undefined
+  // Multi-value filters: "a|b|c" -> ['a', 'b', 'c'] (see MULTI_VALUE_SEPARATOR).
+  // undefined when absent or empty, so "no filter" stays "no filter".
+  const strs = (key: string): string[] | undefined => {
+    const values = str(key)?.split(MULTI_VALUE_SEPARATOR).map((v) => v.trim()).filter(Boolean)
+    return values?.length ? values : undefined
+  }
+  const nums = (key: string): number[] | undefined => {
+    const values = strs(key)?.map(Number).filter(Number.isFinite)
+    return values?.length ? values : undefined
   }
 
   return {
-    ministryId: num('ministryId'),
-    agencyId: num('agencyId'),
-    sector: str('sector'),
-    region: str('region'),
-    projectStatus: str('projectStatus'),
-    permitStatus: str('permitStatus'),
-    companyId: num('companyId'),
-    projectId: num('projectId'),
-    rcaStatus: str('rcaStatus'),
+    ministryId: nums('ministryId'),
+    agencyId: nums('agencyId'),
+    sector: strs('sector'),
+    region: strs('region'),
+    projectStatus: strs('projectStatus'),
+    permitStatus: strs('permitStatus'),
+    companyId: nums('companyId'),
+    projectId: nums('projectId'),
+    rcaStatus: strs('rcaStatus'),
     startDateFrom: str('startDateFrom'),
     startDateTo: str('startDateTo'),
   }
