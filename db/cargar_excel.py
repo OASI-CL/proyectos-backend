@@ -201,6 +201,10 @@ COLS_PROYECTOS = [
     "incluido_en_catastro", "en_universo_2", "sigue_liberado_al_contactar",
     "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados",
     "Urgencia",
+    # Read by the "Tablas CME" sheet (migration 0014). Stored as text, as the
+    # spreadsheet writes them; committeeTables.ts compares them literally.
+    "Factibilidad", "Estado (Liberado, en curso, Desistido)", "comite_ingreso",
+    "etapa_liberados",
 ]
 # UNIVERSO (regla del equipo OASI):
 #   - proyecto en universo = columna AG "en_universo_2" = 1. NO
@@ -413,6 +417,10 @@ def armar(wb):
             "observaciones_oasi": texto(f["observaciones_oasi"]),
             "n_catastro": entero(f["n_catastro"]),
             "urgencia": texto(f["Urgencia"]),
+            "factibilidad": texto(f["Factibilidad"]),
+            "estado_liberacion": texto(f["Estado (Liberado, en curso, Desistido)"]),
+            "comite_ingreso": entero(f["comite_ingreso"]),
+            "etapa_liberados": texto(f["etapa_liberados"]),
             **flags,
         })
 
@@ -584,7 +592,8 @@ def generar_sql(d, archivo_excel):
               "estado_ambiental", "fecha_inicio_construccion", "fecha_inicio_operacion",
               "habilitantes_aprobado", "fecha_ingreso", "fecha_ultima_resolucion", "observaciones_oasi",
               "n_catastro", "incluido_en_catastro", "en_universo_permisos", "sigue_liberado_al_contactar",
-              "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados", "urgencia"]
+              "listado_37_proyectos_liberados", "listado_97_proyectos_no_iniciados", "urgencia",
+              "factibilidad", "estado_liberacion", "comite_ingreso", "etapa_liberados"]
     for p in d["proyectos"]:
         vals = [
             lit(p["id_excel"]), lit(p["nombre"]), lit(p["titular"]),
