@@ -109,6 +109,18 @@ export const proyectos = pgTable(
      * frase resumen de las Tablas del comité. NULL = sin prioridad.
      */
     urgencia: text('urgencia'),
+    /*
+     * Columns of the Proyectos sheet that the "Tablas CME" sheet reads
+     * (migration 0014). Stored as the spreadsheet writes them.
+     */
+    /** Column "Factibilidad": Liberado, En curso, Desistido, Diferido, Baja. */
+    factibilidad: text('factibilidad'),
+    /** Column "Estado (Liberado, en curso, Desistido)". */
+    estado_liberacion: text('estado_liberacion'),
+    /** Column "comite_ingreso": session in which a 2nd-batch project joined. */
+    comite_ingreso: integer('comite_ingreso'),
+    /** Column "etapa_liberados": stage used by Table 2.2 (released projects). */
+    etapa_liberados: text('etapa_liberados'),
 
     ...auditoria,
   },

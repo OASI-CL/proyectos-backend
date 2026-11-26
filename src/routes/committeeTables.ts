@@ -6,7 +6,7 @@ import { fetchCommitteeTables } from '../models/committeeTables'
 const router = Router()
 
 /**
- * GET /committee-tables — the tables of the Excel "Tablas PPT" sheet (the
+ * GET /committee-tables — the tables of the Excel "Tablas CME" sheet (the
  * ones that go into the committee presentation). They are global figures
  * for the whole catastro, so only the OASI team sees them (same as Comités).
  */

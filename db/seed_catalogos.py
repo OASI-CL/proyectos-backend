@@ -98,6 +98,8 @@ ORGANISMOS = [
     # Agregado con la planilla del 02-11-2026 (PM2575, PM2576). Ministerio
     # según la columna "ministerio" de Permisos y la hoja Parámetros.
     (27, "SEREMI VIVIENDA", "Secretaría Regional Ministerial de Vivienda y Urbanismo", "Ministerio de Vivienda y Urbanismo"),
+    # New in the 20261126 spreadsheet (PM2790).
+    (28, "CNE", "Comisión Nacional de Energía", "Ministerio de Energía"),
 ]
 
 # Cómo escribe la planilla algunos organismos -> sigla en el catálogo.
